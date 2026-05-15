@@ -1,0 +1,34 @@
+{
+  "name": "grokscope",
+  "version": "0.1.0",
+  "description": "Live monitoring + observability dashboard for the Grok CLI agent.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://github.com/daniel-farina/grokscope",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/daniel-farina/grokscope.git"
+  },
+  "keywords": [
+    "grok",
+    "grok-cli",
+    "xai",
+    "ai-agent",
+    "observability",
+    "dashboard",
+    "monitoring"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 7777",
+    "server": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10"
+  }
+}

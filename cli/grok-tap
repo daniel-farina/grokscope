@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""
+grok-tap - logging reverse proxy for Grok's cli-chat-proxy.
+
+Sits between `grok` and https://cli-chat-proxy.grok.com, logs every request
+and response (including streaming SSE chunks) to ~/.grok-tap/, then forwards
+the response unchanged.
+
+Run:
+    grok-tap                     # listens on http://127.0.0.1:18080
+
+Use:
+    GROK_CLI_CHAT_PROXY_BASE_URL=http://127.0.0.1:18080/v1 grok
+
+Or one-shot in headless:
+    GROK_CLI_CHAT_PROXY_BASE_URL=http://127.0.0.1:18080/v1 grok -p "hello"
+
+Files written per request:
+    ~/.grok-tap/<ts>-<seq>-req.txt    headers + body
+    ~/.grok-tap/<ts>-<seq>-resp.txt   status + headers + full body (concat'd chunks)
+    ~/.grok-tap/index.jsonl           one-line index of all captures
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import threading
+import time
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import httpx
+
+UPSTREAM = "https://cli-chat-proxy.grok.com"
+LOG_DIR = Path.home() / ".grok-tap"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+INDEX = LOG_DIR / "index.jsonl"
+
+SEQ_LOCK = threading.Lock()
+SEQ = 0
+
+# Headers we shouldn't forward to upstream
+HOP_BY_HOP = {
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade", "host",
+}
+
+
+def next_seq() -> int:
+    global SEQ
+    with SEQ_LOCK:
+        SEQ += 1
+        return SEQ
+
+
+def ts_prefix() -> str:
+    return datetime.now().strftime("%H%M%S.%f")[:-3]
+
+
+def write_request_log(path: Path, method: str, url: str, headers: dict, body: bytes) -> None:
+    redacted_headers = {
+        k: (f"<redacted len={len(v)}>" if k.lower() == "authorization" else v)
+        for k, v in headers.items()
+    }
+    out = [f"{method} {url} HTTP/1.1"]
+    for k, v in redacted_headers.items():
+        out.append(f"{k}: {v}")
+    out.append("")
+    out.append("--- body ---")
+    out.append(_body_pretty(body, headers.get("content-type", "")))
+    path.write_text("\n".join(out), encoding="utf-8")
+
+
+def write_response_log(path: Path, status: int, headers: dict, body: bytes) -> None:
+    out = [f"HTTP/1.1 {status}"]
+    for k, v in headers.items():
+        out.append(f"{k}: {v}")
+    out.append("")
+    out.append("--- body ---")
+    out.append(_body_pretty(body, headers.get("content-type", "")))
+    path.write_text("\n".join(out), encoding="utf-8")
+
+
+def _body_pretty(body: bytes, content_type: str) -> str:
+    if not body:
+        return "(empty)"
+    text = body.decode("utf-8", errors="replace")
+    ct = content_type.lower()
+    if "application/json" in ct:
+        try:
+            return json.dumps(json.loads(text), indent=2)
+        except json.JSONDecodeError:
+            return text
+    return text
+
+
+def index_append(record: dict) -> None:
+    with INDEX.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+
+class Tap(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        # quieter default logging; we have our own logs
+        sys.stderr.write(f"[grok-tap] {self.address_string()} - {fmt % args}\n")
+
+    def _handle(self, method: str) -> None:
+        seq = next_seq()
+        prefix = ts_prefix()
+        tag = f"{prefix}-{seq:04d}"
+
+        # Read request body
+        body = b""
+        length = self.headers.get("Content-Length")
+        if length is not None:
+            try:
+                body = self.rfile.read(int(length))
+            except Exception as e:
+                self._send_error(502, f"reading req body: {e}")
+                return
+
+        # Build upstream URL
+        upstream_url = UPSTREAM.rstrip("/") + self.path
+
+        # Filter headers
+        out_headers = {}
+        for k, v in self.headers.items():
+            if k.lower() in HOP_BY_HOP:
+                continue
+            out_headers[k] = v
+        out_headers["Host"] = UPSTREAM.split("://", 1)[1]
+
+        # Log the request
+        req_path = LOG_DIR / f"{tag}-req.txt"
+        write_request_log(req_path, method, upstream_url, dict(self.headers), body)
+
+        start = time.time()
+        try:
+            with httpx.Client(http2=False, timeout=httpx.Timeout(600.0, connect=15.0)) as client:
+                with client.stream(
+                    method,
+                    upstream_url,
+                    headers=out_headers,
+                    content=body or None,
+                ) as upstream:
+                    status = upstream.status_code
+                    resp_headers = dict(upstream.headers)
+                    # strip hop-by-hop on the way back
+                    filtered = {k: v for k, v in resp_headers.items() if k.lower() not in HOP_BY_HOP}
+                    self.send_response(status)
+                    for k, v in filtered.items():
+                        self.send_header(k, v)
+                    self.end_headers()
+
+                    captured = bytearray()
+                    for chunk in upstream.iter_bytes():
+                        if not chunk:
+                            continue
+                        try:
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError):
+                            break
+                        captured.extend(chunk)
+
+                    elapsed = time.time() - start
+                    resp_path = LOG_DIR / f"{tag}-resp.txt"
+                    write_response_log(resp_path, status, resp_headers, bytes(captured))
+                    index_append({
+                        "tag": tag,
+                        "ts": prefix,
+                        "method": method,
+                        "path": self.path,
+                        "status": status,
+                        "req_bytes": len(body),
+                        "resp_bytes": len(captured),
+                        "elapsed_ms": int(elapsed * 1000),
+                        "req_file": req_path.name,
+                        "resp_file": resp_path.name,
+                    })
+        except httpx.HTTPError as e:
+            self._send_error(502, f"upstream error: {e}")
+
+    def _send_error(self, status: int, msg: str) -> None:
+        body = msg.encode()
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            pass
+
+    def do_GET(self):    self._handle("GET")
+    def do_POST(self):   self._handle("POST")
+    def do_PUT(self):    self._handle("PUT")
+    def do_DELETE(self): self._handle("DELETE")
+    def do_PATCH(self):  self._handle("PATCH")
+    def do_HEAD(self):   self._handle("HEAD")
+
+
+def main() -> None:
+    port = int(os.environ.get("GROK_TAP_PORT", "18080"))
+    addr = ("127.0.0.1", port)
+    server = ThreadingHTTPServer(addr, Tap)
+    print(f"grok-tap listening on http://{addr[0]}:{addr[1]}")
+    print(f"upstream:       {UPSTREAM}")
+    print(f"log dir:        {LOG_DIR}")
+    print(f"index file:     {INDEX}")
+    print()
+    print("Point grok at this with:")
+    print(f"  GROK_CLI_CHAT_PROXY_BASE_URL=http://{addr[0]}:{addr[1]}/v1 grok")
+    print()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

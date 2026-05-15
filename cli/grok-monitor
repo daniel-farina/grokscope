@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+"""
+grok-monitor - live dashboard for an active Grok CLI session.
+
+Tracks lines of code written, tokens/sec, tool activity, and turn stats
+by tailing ~/.grok/sessions/<cwd-encoded>/<session-id>/*.jsonl.
+
+Usage:
+  grok-monitor                    # auto-pick most recently updated session
+  grok-monitor --cwd <path>       # pick most recent session under that cwd
+  grok-monitor --session <id>     # explicit session id (partial prefix ok)
+  grok-monitor --list             # list recent sessions and exit
+  grok-monitor --refresh 0.5      # refresh interval seconds (default 1.0)
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable
+
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+GROK_HOME = Path(os.environ.get("GROK_HOME", Path.home() / ".grok"))
+SESSIONS_ROOT = GROK_HOME / "sessions"
+TOKEN_WINDOW_SECONDS = 30.0  # rolling window for tokens/sec
+
+
+# ---------- session discovery ----------
+
+@dataclass
+class SessionRef:
+    sid: str
+    path: Path
+    cwd: str
+    last_active: float  # epoch seconds
+
+
+def _decode_cwd(name: str) -> str:
+    # Grok URL-encodes the cwd ('/' -> '%2F', etc.)
+    try:
+        from urllib.parse import unquote
+        return unquote(name)
+    except Exception:
+        return name
+
+
+def find_sessions() -> list[SessionRef]:
+    refs: list[SessionRef] = []
+    if not SESSIONS_ROOT.is_dir():
+        return refs
+    for cwd_dir in SESSIONS_ROOT.iterdir():
+        if not cwd_dir.is_dir():
+            continue
+        cwd = _decode_cwd(cwd_dir.name)
+        for sess_dir in cwd_dir.iterdir():
+            if not sess_dir.is_dir():
+                continue
+            summary = sess_dir / "summary.json"
+            if not summary.exists():
+                continue
+            try:
+                mt = max(
+                    (p.stat().st_mtime for p in sess_dir.glob("*.jsonl")),
+                    default=summary.stat().st_mtime,
+                )
+            except OSError:
+                continue
+            refs.append(SessionRef(sid=sess_dir.name, path=sess_dir, cwd=cwd, last_active=mt))
+    refs.sort(key=lambda r: r.last_active, reverse=True)
+    return refs
+
+
+def pick_session(args) -> SessionRef:
+    sessions = find_sessions()
+    if not sessions:
+        sys.exit(f"No Grok sessions found under {SESSIONS_ROOT}")
+    if args.session:
+        matches = [s for s in sessions if s.sid.startswith(args.session)]
+        if not matches:
+            sys.exit(f"No session matches id prefix {args.session!r}")
+        return matches[0]
+    if args.cwd:
+        target = str(Path(args.cwd).expanduser().resolve())
+        matches = [s for s in sessions if s.cwd == target]
+        if not matches:
+            sys.exit(f"No sessions for cwd {target}")
+        return matches[0]
+    # Default: prefer top-level sessions, skip subagent worktree sessions.
+    worktrees_root = str(GROK_HOME / "worktrees")
+    primary = [s for s in sessions if not s.cwd.startswith(worktrees_root)]
+    return (primary or sessions)[0]
+
+
+# ---------- stats ----------
+
+@dataclass
+class SessionStats:
+    # cumulative -- gross (eventType == "added": fresh code produced this session)
+    lines_added: int = 0
+    lines_removed: int = 0
+    # net delta across all hunk events ("added", "updated", "removed" lifecycle)
+    net_added: int = 0
+    net_removed: int = 0
+    files_touched: set[str] = field(default_factory=set)
+    hunks_by_author: dict[str, int] = field(default_factory=dict)
+    lines_added_by_ext: dict[str, int] = field(default_factory=dict)
+    lines_removed_by_ext: dict[str, int] = field(default_factory=dict)
+
+    # turn / event counts
+    turns_started: int = 0
+    turns_ended: int = 0
+    turns_error: int = 0
+    tools_started: int = 0
+    tools_completed: int = 0
+    permission_prompts: int = 0
+    first_token_events: int = 0
+    current_tool: str | None = None
+    current_phase: str | None = None
+    last_event_ts: float = 0.0
+
+    # token stream
+    token_samples: deque = field(default_factory=lambda: deque(maxlen=4096))  # (epoch_s, totalTokens)
+    last_total_tokens: int = 0
+    peak_total_tokens: int = 0
+    tokens_per_sec: float = 0.0
+
+    # tool name histogram
+    tool_counts: dict[str, int] = field(default_factory=dict)
+
+    # session meta
+    title: str = ""
+    model: str = ""
+    num_messages: int = 0
+    num_chat_messages: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+
+
+def _iso_to_epoch(ts: str) -> float:
+    if not ts:
+        return 0.0
+    try:
+        # Strip 'Z' for fromisoformat on older pythons
+        if ts.endswith("Z"):
+            ts = ts[:-1] + "+00:00"
+        return datetime.fromisoformat(ts).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _read_lines(path: Path) -> Iterable[str]:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    yield line
+    except FileNotFoundError:
+        return
+
+
+def _ext_bucket(file_path: str) -> str:
+    name = Path(file_path).name
+    if "." not in name:
+        return "(none)"
+    ext = name.rsplit(".", 1)[1].lower()
+    return ext or "(none)"
+
+
+def collect_stats(sess: SessionRef) -> SessionStats:
+    stats = SessionStats()
+
+    # summary.json
+    summary_p = sess.path / "summary.json"
+    if summary_p.exists():
+        try:
+            s = json.loads(summary_p.read_text())
+            stats.title = s.get("generated_title") or s.get("session_summary") or ""
+            stats.model = s.get("current_model_id", "")
+            stats.num_messages = s.get("num_messages", 0)
+            stats.num_chat_messages = s.get("num_chat_messages", 0)
+            stats.created_at = s.get("created_at", "")
+            stats.updated_at = s.get("updated_at", "")
+        except json.JSONDecodeError:
+            pass
+
+    # hunk_records.jsonl -- lines of code
+    sess_dir_str = str(sess.path)
+    for line in _read_lines(sess.path / "hunk_records.jsonl"):
+        try:
+            h = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        fp = h.get("filePath", "")
+        # exclude session-internal files (plan.md, etc. under the session dir)
+        if fp.startswith(sess_dir_str):
+            continue
+        added = int(h.get("linesAdded", 0))
+        removed = int(h.get("linesRemoved", 0))
+        event_type = h.get("eventType", "added")
+        author = h.get("authorType", "unknown")
+        # always count for net (lifecycle handles sign automatically)
+        stats.net_added += added
+        stats.net_removed += removed
+        # only count "added" events for the gross "lines written" metric;
+        # "updated"/"removed" events represent hunk lifecycle revisions
+        # whose linesAdded/Removed can be negative or counter-balanced.
+        if event_type == "added":
+            stats.lines_added += added
+            stats.lines_removed += removed
+            stats.files_touched.add(fp)
+            ext = _ext_bucket(fp)
+            stats.lines_added_by_ext[ext] = stats.lines_added_by_ext.get(ext, 0) + added
+            stats.lines_removed_by_ext[ext] = stats.lines_removed_by_ext.get(ext, 0) + removed
+        stats.hunks_by_author[author] = stats.hunks_by_author.get(author, 0) + 1
+
+    # events.jsonl -- turns, tools, phase
+    for line in _read_lines(sess.path / "events.jsonl"):
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        etype = e.get("type", "")
+        ets = _iso_to_epoch(e.get("ts", ""))
+        if ets > stats.last_event_ts:
+            stats.last_event_ts = ets
+        if etype == "turn_started":
+            stats.turns_started += 1
+        elif etype == "turn_ended":
+            stats.turns_ended += 1
+            if e.get("outcome") == "error":
+                stats.turns_error += 1
+        elif etype == "tool_started":
+            stats.tools_started += 1
+            name = e.get("tool") or e.get("tool_name") or e.get("name") or "?"
+            stats.tool_counts[name] = stats.tool_counts.get(name, 0) + 1
+            stats.current_tool = name
+        elif etype == "tool_completed":
+            stats.tools_completed += 1
+            if stats.tools_started == stats.tools_completed:
+                stats.current_tool = None
+        elif etype == "permission_requested":
+            stats.permission_prompts += 1
+        elif etype == "first_token":
+            stats.first_token_events += 1
+        elif etype == "phase_changed":
+            stats.current_phase = e.get("phase") or e.get("to") or stats.current_phase
+
+    # updates.jsonl -- token totals + tool names (richer than events)
+    for line in _read_lines(sess.path / "updates.jsonl"):
+        try:
+            u = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = u.get("timestamp")
+        if isinstance(ts, (int, float)):
+            ts_s = float(ts) / 1000.0 if ts > 1e12 else float(ts)
+        else:
+            ts_s = 0.0
+        params = u.get("params") or {}
+        meta = params.get("_meta") or {}
+        tt = meta.get("totalTokens")
+        if isinstance(tt, (int, float)) and tt > 0:
+            stats.last_total_tokens = int(tt)
+            stats.peak_total_tokens = max(stats.peak_total_tokens, int(tt))
+            if ts_s > 0:
+                stats.token_samples.append((ts_s, int(tt)))
+        # Capture tool names from tool_call updates (more reliable than events.jsonl)
+        upd = params.get("update") or {}
+        if upd.get("sessionUpdate") == "tool_call":
+            tname = upd.get("title") or upd.get("kind") or upd.get("toolName")
+            if tname:
+                # only add if not already counted via events.jsonl
+                stats.tool_counts.setdefault(tname, 0)
+
+    # tokens/sec from rolling window
+    if stats.token_samples:
+        cutoff = stats.token_samples[-1][0] - TOKEN_WINDOW_SECONDS
+        window = [(t, v) for (t, v) in stats.token_samples if t >= cutoff]
+        if len(window) >= 2:
+            (t0, v0), (t1, v1) = window[0], window[-1]
+            dt = t1 - t0
+            dv = v1 - v0
+            if dt > 0 and dv >= 0:
+                stats.tokens_per_sec = dv / dt
+    return stats
+
+
+# ---------- rendering ----------
+
+def _fmt_rel(ts: float) -> str:
+    if ts <= 0:
+        return "never"
+    delta = time.time() - ts
+    if delta < 0:
+        delta = 0
+    if delta < 60:
+        return f"{int(delta)}s ago"
+    if delta < 3600:
+        return f"{int(delta // 60)}m{int(delta % 60):02d}s ago"
+    return f"{int(delta // 3600)}h{int((delta % 3600) // 60):02d}m ago"
+
+
+def _fmt_int(n: int) -> str:
+    return f"{n:,}"
+
+
+def render(sess: SessionRef, stats: SessionStats) -> Panel:
+    console = Console()
+
+    # Header
+    header = Table.grid(padding=(0, 2))
+    header.add_column(style="bold cyan")
+    header.add_column()
+    header.add_row("session", f"{sess.sid[:8]}…  [dim]{sess.sid}[/dim]")
+    header.add_row("cwd", sess.cwd)
+    header.add_row("model", stats.model or "?")
+    header.add_row("title", stats.title or "(untitled)")
+    header.add_row("last activity", f"[green]{_fmt_rel(stats.last_event_ts)}[/green]")
+    if stats.current_phase:
+        header.add_row("phase", stats.current_phase)
+    if stats.current_tool:
+        header.add_row("active tool", f"[yellow]{stats.current_tool}[/yellow]")
+
+    # Tokens
+    tok = Table(title="tokens", show_header=False, expand=True, padding=(0, 1))
+    tok.add_column(style="cyan")
+    tok.add_column(justify="right")
+    rate_str = f"{stats.tokens_per_sec:.1f}/s" if stats.tokens_per_sec else "-"
+    tok.add_row("last total", _fmt_int(stats.last_total_tokens))
+    tok.add_row("peak total", _fmt_int(stats.peak_total_tokens))
+    tok.add_row(f"rate (last {int(TOKEN_WINDOW_SECONDS)}s)", rate_str)
+    tok.add_row("samples", _fmt_int(len(stats.token_samples)))
+
+    # Lines of code
+    loc = Table(title="lines of code", show_header=False, expand=True, padding=(0, 1))
+    loc.add_column(style="cyan")
+    loc.add_column(justify="right")
+    loc.add_row("written", f"[green]+{_fmt_int(stats.lines_added)}[/green]")
+    loc.add_row("replaced", f"[red]-{_fmt_int(stats.lines_removed)}[/red]")
+    net_now = stats.net_added - stats.net_removed
+    sign = "+" if net_now >= 0 else ""
+    loc.add_row("net live", f"{sign}{_fmt_int(net_now)}")
+    loc.add_row("files touched", _fmt_int(len(stats.files_touched)))
+    for author, count in sorted(stats.hunks_by_author.items()):
+        loc.add_row(f"hunks ({author})", _fmt_int(count))
+
+    # Tools / turns
+    flow = Table(title="flow", show_header=False, expand=True, padding=(0, 1))
+    flow.add_column(style="cyan")
+    flow.add_column(justify="right")
+    flow.add_row("turns started", _fmt_int(stats.turns_started))
+    flow.add_row("turns ended", _fmt_int(stats.turns_ended))
+    flow.add_row("turn errors", f"[red]{_fmt_int(stats.turns_error)}[/red]" if stats.turns_error else "0")
+    flow.add_row("tools started", _fmt_int(stats.tools_started))
+    flow.add_row("tools completed", _fmt_int(stats.tools_completed))
+    flow.add_row("permission prompts", _fmt_int(stats.permission_prompts))
+    flow.add_row("chat messages", _fmt_int(stats.num_chat_messages))
+
+    # Side-by-side stat tables
+    side = Table.grid(padding=(0, 1), expand=True)
+    side.add_column(ratio=1)
+    side.add_column(ratio=1)
+    side.add_column(ratio=1)
+    side.add_row(tok, loc, flow)
+
+    # Per-extension breakdown
+    if stats.lines_added_by_ext:
+        ext_tbl = Table(title="by extension", expand=True, padding=(0, 1))
+        ext_tbl.add_column("ext", style="cyan")
+        ext_tbl.add_column("added", justify="right", style="green")
+        ext_tbl.add_column("removed", justify="right", style="red")
+        ext_tbl.add_column("net", justify="right")
+        top = sorted(
+            stats.lines_added_by_ext.items(),
+            key=lambda kv: kv[1] + stats.lines_removed_by_ext.get(kv[0], 0),
+            reverse=True,
+        )[:6]
+        for ext, added in top:
+            removed = stats.lines_removed_by_ext.get(ext, 0)
+            n = added - removed
+            ext_tbl.add_row(ext, f"+{_fmt_int(added)}", f"-{_fmt_int(removed)}", _fmt_int(n))
+    else:
+        ext_tbl = Text("no edits yet", style="dim")
+
+    # Tool usage histogram
+    if stats.tool_counts:
+        tool_tbl = Table(title="tool usage", expand=True, padding=(0, 1))
+        tool_tbl.add_column("tool", style="cyan")
+        tool_tbl.add_column("calls", justify="right")
+        for name, n in sorted(stats.tool_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]:
+            tool_tbl.add_row(name, _fmt_int(n))
+    else:
+        tool_tbl = Text("no tool calls yet", style="dim")
+
+    bottom = Table.grid(padding=(0, 1), expand=True)
+    bottom.add_column(ratio=1)
+    bottom.add_column(ratio=1)
+    bottom.add_row(ext_tbl, tool_tbl)
+
+    body = Group(header, Text(""), side, Text(""), bottom)
+    return Panel(
+        body,
+        title=f"[bold]grok-monitor[/bold] · {datetime.now().strftime('%H:%M:%S')}",
+        border_style="bright_blue",
+    )
+
+
+# ---------- main ----------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Live monitor for a Grok CLI session.")
+    parser.add_argument("--session", help="Session id (prefix ok)")
+    parser.add_argument("--cwd", help="Pick most-recent session for this cwd")
+    parser.add_argument("--list", action="store_true", help="List recent sessions and exit")
+    parser.add_argument("--refresh", type=float, default=1.0, help="Refresh interval seconds (default 1.0)")
+    parser.add_argument("--once", action="store_true", help="Print a single snapshot and exit")
+    args = parser.parse_args()
+
+    if args.list:
+        sessions = find_sessions()
+        console = Console()
+        t = Table(title="Recent Grok sessions")
+        t.add_column("id")
+        t.add_column("cwd")
+        t.add_column("last activity")
+        for s in sessions[:25]:
+            t.add_row(s.sid[:8] + "…", s.cwd, _fmt_rel(s.last_active))
+        console.print(t)
+        return
+
+    sess = pick_session(args)
+    console = Console()
+
+    if args.once:
+        stats = collect_stats(sess)
+        console.print(render(sess, stats))
+        return
+
+    refresh = max(0.25, args.refresh)
+    try:
+        with Live(render(sess, collect_stats(sess)), console=console, refresh_per_second=4, screen=False) as live:
+            while True:
+                time.sleep(refresh)
+                live.update(render(sess, collect_stats(sess)))
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

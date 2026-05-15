@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>grok-dashboard</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo">GROK</span>
+          <span class="brand-sub">dashboard</span>
+        </div>
+        <div class="session-head" id="session-head">
+          <div class="session-title" id="session-title">no session</div>
+          <div class="session-meta">
+            <span id="session-model" class="pill">-</span>
+            <span id="session-cwd" class="cwd">-</span>
+          </div>
+        </div>
+        <div class="live-wrap">
+          <span class="live-dot" id="live-dot"></span>
+          <span class="live-text" id="live-text">connecting</span>
+        </div>
+      </header>
+
+      <main class="main">
+        <aside class="sidebar">
+          <div class="sidebar-title">Sessions</div>
+          <div class="session-list" id="session-list">loading...</div>
+        </aside>
+
+        <section class="panel">
+          <div class="cards">
+            <div class="card">
+              <div class="card-label">Tokens</div>
+              <div class="card-value" id="card-tokens">0</div>
+              <div class="card-sub">
+                <span id="card-tps">0.00</span> tok/s
+                <span class="muted"> · peak </span>
+                <span id="card-peak">0</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-label">Lines written</div>
+              <div class="card-value">
+                <span class="added" id="card-added">+0</span>
+                <span class="muted-sep">/</span>
+                <span class="removed" id="card-removed">-0</span>
+              </div>
+              <div class="card-sub">
+                net
+                <span id="card-net">+0</span>
+                <span class="muted"> · </span>
+                <span id="card-net-removed">-0</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-label">Files touched</div>
+              <div class="card-value" id="card-files">0</div>
+              <div class="card-sub" id="card-files-sub">-</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Turns</div>
+              <div class="card-value">
+                <span id="card-turns-started">0</span>
+                <span class="muted-sep">/</span>
+                <span class="muted" id="card-turns-ended">0</span>
+              </div>
+              <div class="card-sub">
+                err
+                <span id="card-turns-error" class="removed">0</span>
+                <span class="muted"> · prompts </span>
+                <span id="card-perms">0</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-label">Tools</div>
+              <div class="card-value">
+                <span id="card-tools-started">0</span>
+                <span class="muted-sep">/</span>
+                <span class="muted" id="card-tools-completed">0</span>
+              </div>
+              <div class="card-sub">
+                current
+                <span class="pill" id="card-current-tool">idle</span>
+              </div>
+            </div>
+            <div class="card card-usage">
+              <div class="card-label">API tokens (in / out)</div>
+              <div class="card-value">
+                <span class="usage-in" id="card-usage-in">0</span>
+                <span class="muted-sep">/</span>
+                <span class="usage-out" id="card-usage-out">0</span>
+              </div>
+              <div class="card-sub">
+                <span id="card-usage-calls">0</span> calls
+                <span class="muted"> · cached </span>
+                <span id="card-usage-cached">0</span>
+                <span class="muted"> · </span>
+                <span id="card-usage-cost">$0.00</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block block-wide">
+              <h3>Tokens per API call (input vs output)</h3>
+              <div id="usage-chart" class="usage-chart">loading...</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block">
+              <h3>Tool usage</h3>
+              <div id="tool-bars" class="bars">loading...</div>
+            </div>
+            <div class="block">
+              <h3>Lines by extension</h3>
+              <div id="ext-bars" class="bars">loading...</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block">
+              <h3>Recent edits</h3>
+              <div id="recent-edits" class="list">loading...</div>
+            </div>
+            <div class="block">
+              <h3>API captures (grok-tap)</h3>
+              <div id="captures" class="list">loading...</div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footbar">
+        <span id="foot-session">-</span>
+        <span class="muted"> · last event </span>
+        <span id="foot-last-event">-</span>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
