@@ -6,15 +6,18 @@ const HISTORY_MAX = 60; // sparkline buffer length (60s at 1 Hz)
 const PAGE_SIZE = 10;
 
 const state = {
+  view: 'overview', // 'overview' | 'session'
   sessions: [],
   activeId: null,
   pinned: false,
   evtSource: null,
   lastEventAt: 0,
   search: '',
-  pages: { edits: 0, captures: 0, usage: 0 },
+  pages: { edits: 0, captures: 0, usage: 0, files: 0, git: 0 },
   captures: [],
-  collapsed: new Set(), // parent ids that are collapsed in the sidebar
+  files: { cwd: null, list: [] },
+  git: { cwd: null, info: null },
+  collapsed: new Set(),
   history: {
     tokens: [],
     loc: [],
@@ -23,6 +26,7 @@ const state = {
     turns: [],
   },
   lastStats: null,
+  overview: null,
 };
 
 function fmtNum(n) {
@@ -227,6 +231,10 @@ function renderSessions() {
       resetHistory();
       restartStream();
       renderSessions();
+      // auto-switch to session view when a session is selected
+      setView('session');
+      loadFiles(s.id);
+      loadGit(s.id);
     };
 
     const head = document.createElement('div');
@@ -297,6 +305,223 @@ function renderSessions() {
 
 function resetHistory() {
   for (const k of Object.keys(state.history)) state.history[k] = [];
+}
+
+// ---------- view switching ----------
+
+function setView(v) {
+  state.view = v;
+  for (const t of document.querySelectorAll('.view-tab')) {
+    t.classList.toggle('active', t.dataset.view === v);
+  }
+  $('panel-overview').hidden = v !== 'overview';
+  $('panel-session').hidden = v !== 'session';
+  if (v === 'overview') loadOverview();
+  if (v === 'session' && state.activeId) {
+    loadFiles(state.activeId);
+    loadGit(state.activeId);
+  }
+}
+
+// ---------- overview ----------
+
+function fmtBytesShort(n) {
+  if (n == null) return '-';
+  if (n < 1024) return n + 'B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + 'K';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + 'M';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + 'G';
+}
+
+async function loadOverview() {
+  try {
+    const r = await fetch('/api/overview');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    state.overview = await r.json();
+    renderOverview();
+  } catch (e) {
+    $('overview-projects').textContent = 'error: ' + e.message;
+  }
+}
+
+function renderOverview() {
+  const ov = state.overview;
+  if (!ov) return;
+  const t = ov.totals;
+
+  // metric strip with all-time totals (overrides session-mode values)
+  $('m-tokens').textContent = fmtNum(t.tokens_input + t.tokens_output);
+  $('m-token-rate').textContent = 'all time';
+  $('m-loc').textContent = fmtNum(t.lines_added);
+  $('m-loc-delta').textContent = `${ov.totals.files_touched} files`;
+  $('m-tools').textContent = fmtNum(t.tools_started);
+  $('m-tool-delta').textContent = `${t.turns_started} turns`;
+  $('m-cost').textContent = '$' + (t.cost_usd || 0).toFixed(4);
+  $('m-cost-calls').textContent = `${t.api_calls} calls`;
+  $('m-turns').textContent = fmtNum(t.sessions);
+  $('m-turn-errors').textContent = `${t.main_sessions} main + ${t.subagents} sub`;
+
+  // Static sparklines from activity data
+  renderSpark('spark-tokens', ov.activity.map((d) => d.sessions), '#5eead4');
+  renderSpark('spark-loc', ov.activity.map((d) => d.lines), '#86efac');
+  renderSpark('spark-tools', ov.activity.map((d) => d.sessions), '#c4b5fd');
+  renderSpark('spark-cost', ov.activity.map((d) => d.cost), '#fbbf24');
+  renderSpark('spark-turns', ov.activity.map((d) => d.sessions), '#f9a8d4');
+
+  // Top projects
+  const projRoot = $('overview-projects');
+  projRoot.innerHTML = '';
+  if (!ov.top_projects.length) {
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = 'no projects';
+    projRoot.appendChild(d);
+  } else {
+    for (const p of ov.top_projects) {
+      const row = document.createElement('div');
+      row.className = 'proj-row';
+      const short = p.cwd.replace(/^\/Users\/[^/]+\//, '~/');
+      row.innerHTML = `
+        <span class="proj-name" title="${p.cwd}">${short}</span>
+        <span class="proj-sessions">${p.sessions} sess</span>
+        <span class="proj-lines added">+${fmtNum(p.lines_added)}</span>
+        <span class="proj-when">${fmtAgo(p.last_active)}</span>
+      `;
+      projRoot.appendChild(row);
+    }
+  }
+
+  // Activity strip - calendar-like
+  const actRoot = $('overview-activity');
+  actRoot.innerHTML = '';
+  const maxLines = Math.max(...ov.activity.map((d) => d.lines), 1);
+  for (const day of ov.activity) {
+    const cell = document.createElement('div');
+    cell.className = 'act-cell';
+    const intensity = Math.min(4, Math.floor((day.lines / maxLines) * 5));
+    cell.dataset.level = String(day.lines === 0 ? 0 : Math.max(1, intensity));
+    cell.title = `${day.day}: ${day.sessions} sessions, ${day.lines} lines added`;
+    actRoot.appendChild(cell);
+  }
+
+  // Top extensions + tools as bars
+  renderBars($('overview-ext'), ov.top_extensions.map((e) => ({ name: '.' + e.ext, value: e.lines })));
+  renderBars($('overview-tools'), ov.top_tools.map((t) => ({ name: t.name, value: t.count })));
+}
+
+// ---------- files + git ----------
+
+async function loadFiles(sid) {
+  try {
+    const r = await fetch(`/api/session/${sid}/files`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    state.files = { cwd: d.cwd, list: d.files || [] };
+    state.pages.files = 0;
+    renderFiles();
+  } catch (e) {
+    $('files-list').textContent = 'error: ' + e.message;
+  }
+}
+
+function renderFiles() {
+  const root = $('files-list');
+  const pagerEl = $('files-pager');
+  root.innerHTML = '';
+  pagerEl.innerHTML = '';
+  const list = state.files.list;
+  if (!list.length) {
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = state.files.cwd ? 'no files (cwd may not exist)' : 'select a session';
+    root.appendChild(d);
+    return;
+  }
+  const pages = Math.ceil(list.length / PAGE_SIZE);
+  state.pages.files = Math.min(state.pages.files, pages - 1);
+  const start = state.pages.files * PAGE_SIZE;
+  const slice = list.slice(start, start + PAGE_SIZE);
+
+  for (const f of slice) {
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    row.innerHTML = `
+      <span class="file-ext">.${f.ext}</span>
+      <span class="path" title="${f.path}">${f.path}</span>
+      <span class="muted">${fmtBytesShort(f.size)}</span>
+      <span class="when">${fmtAgo(f.mtime / 1000)}</span>
+    `;
+    root.appendChild(row);
+  }
+  pagerEl.append(...buildPager(state.pages.files, pages, (p) => {
+    state.pages.files = p;
+    renderFiles();
+  }, list.length));
+}
+
+async function loadGit(sid) {
+  try {
+    const r = await fetch(`/api/session/${sid}/git`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    state.git = { cwd: state.lastStats?.meta?.cwd || null, info: await r.json() };
+    state.pages.git = 0;
+    renderGit();
+  } catch (e) {
+    $('git-list').textContent = 'error: ' + e.message;
+  }
+}
+
+function renderGit() {
+  const root = $('git-list');
+  const pagerEl = $('git-pager');
+  const branchEl = $('git-branch');
+  root.innerHTML = '';
+  pagerEl.innerHTML = '';
+  branchEl.textContent = '';
+  const info = state.git.info;
+  if (!info || !info.exists) {
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = 'cwd does not exist';
+    root.appendChild(d);
+    return;
+  }
+  if (!info.is_repo) {
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = 'not a git repo';
+    root.appendChild(d);
+    return;
+  }
+  if (info.branch) branchEl.textContent = info.branch + (info.dirty_count ? ' · ' + info.dirty_count + ' dirty' : '');
+  const commits = info.commits || [];
+  if (!commits.length) {
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = 'no commits';
+    root.appendChild(d);
+    return;
+  }
+  const pages = Math.ceil(commits.length / PAGE_SIZE);
+  state.pages.git = Math.min(state.pages.git, pages - 1);
+  const start = state.pages.git * PAGE_SIZE;
+  const slice = commits.slice(start, start + PAGE_SIZE);
+  for (const c of slice) {
+    const row = document.createElement('div');
+    row.className = 'commit-row';
+    const stat = c.stat || { files: 0, insertions: 0, deletions: 0 };
+    row.innerHTML = `
+      <span class="commit-sha">${c.sha}</span>
+      <span class="commit-msg" title="${c.subject}">${c.subject}</span>
+      <span class="commit-stat"><span class="added">+${stat.insertions}</span><span class="removed">-${stat.deletions}</span></span>
+      <span class="when">${fmtAgo(Date.parse(c.date) / 1000)}</span>
+    `;
+    root.appendChild(row);
+  }
+  pagerEl.append(...buildPager(state.pages.git, pages, (p) => {
+    state.pages.git = p;
+    renderGit();
+  }, commits.length));
 }
 
 // ---------- captures ----------
@@ -688,14 +913,29 @@ function wireUi() {
     const path = btn.dataset.copy || '';
     if (path) copyText(path, btn);
   });
+
+  // view tabs
+  for (const t of document.querySelectorAll('.view-tab')) {
+    t.addEventListener('click', () => setView(t.dataset.view));
+  }
 }
 
 async function init() {
   wireUi();
-  await Promise.all([loadSessions(), loadCaptures()]);
+  await Promise.all([loadSessions(), loadCaptures(), loadOverview()]);
+  setView('overview');
   restartStream();
   setInterval(loadSessions, 5000);
   setInterval(loadCaptures, 5000);
+  setInterval(() => {
+    if (state.view === 'overview') loadOverview();
+  }, 15000);
+  setInterval(() => {
+    if (state.activeId && state.view === 'session') {
+      loadFiles(state.activeId);
+      loadGit(state.activeId);
+    }
+  }, 10000);
   setInterval(() => {
     if (state.lastEventAt && Date.now() - state.lastEventAt > 4000) {
       setLive(false, 'stale');

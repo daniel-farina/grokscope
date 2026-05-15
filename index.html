@@ -32,6 +32,10 @@
             </span>
           </div>
         </div>
+        <div class="view-tabs" id="view-tabs">
+          <button class="view-tab active" data-view="overview">Overview</button>
+          <button class="view-tab" data-view="session">Session</button>
+        </div>
         <div class="live-wrap">
           <span class="live-dot" id="live-dot"></span>
           <span class="live-text" id="live-text">connecting</span>
@@ -95,7 +99,30 @@
           <div class="session-list" id="session-list">loading...</div>
         </aside>
 
-        <section class="panel">
+        <section class="panel" id="panel-overview" hidden>
+          <div class="row">
+            <div class="block">
+              <div class="block-head"><h3>Top projects</h3></div>
+              <div id="overview-projects" class="list">loading...</div>
+            </div>
+            <div class="block">
+              <div class="block-head"><h3>Activity (last 30 days)</h3></div>
+              <div id="overview-activity" class="activity-strip">loading...</div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="block">
+              <div class="block-head"><h3>Lines by extension (all-time)</h3></div>
+              <div id="overview-ext" class="bars">loading...</div>
+            </div>
+            <div class="block">
+              <div class="block-head"><h3>Tools used (all-time)</h3></div>
+              <div id="overview-tools" class="bars">loading...</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-session">
           <div class="cards">
             <div class="card card-tokens">
               <div class="card-label">Tokens</div>
@@ -201,6 +228,23 @@
                 <div class="pager" id="captures-pager"></div>
               </div>
               <div id="captures" class="list">loading...</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block">
+              <div class="block-head">
+                <h3>Files in working directory</h3>
+                <div class="pager" id="files-pager"></div>
+              </div>
+              <div id="files-list" class="list">loading...</div>
+            </div>
+            <div class="block">
+              <div class="block-head">
+                <h3>Git history <span class="branch-pill" id="git-branch"></span></h3>
+                <div class="pager" id="git-pager"></div>
+              </div>
+              <div id="git-list" class="list">loading...</div>
             </div>
           </div>
         </section>

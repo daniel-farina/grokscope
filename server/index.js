@@ -552,6 +552,255 @@ async function usageForSession(sess) {
   return all.filter((u) => u.cwd === sess.cwd);
 }
 
+// ------------ overview (all-time aggregates) ------------
+
+const OVERVIEW_TTL_MS = 60 * 1000;
+let overviewCache = { ts: 0, data: null };
+
+async function buildOverview() {
+  if (Date.now() - overviewCache.ts < OVERVIEW_TTL_MS && overviewCache.data) {
+    return overviewCache.data;
+  }
+  const sessions = await listSessions();
+  const totals = {
+    sessions: sessions.length,
+    main_sessions: 0,
+    subagents: 0,
+    messages: 0,
+    turns_started: 0,
+    turns_ended: 0,
+    turns_error: 0,
+    tools_started: 0,
+    lines_added: 0,
+    lines_removed: 0,
+    files_touched: 0,
+    permission_prompts: 0,
+    cost_usd: 0,
+    api_calls: 0,
+    tokens_input: 0,
+    tokens_output: 0,
+  };
+  const filesUniverse = new Set();
+  const byExt = new Map();
+  const byTool = new Map();
+  const byProject = new Map();
+  const byDay = new Map(); // YYYY-MM-DD -> { sessions, lines, cost }
+
+  for (const s of sessions) {
+    if (s.parent_id) totals.subagents += 1;
+    else totals.main_sessions += 1;
+    totals.messages += s.num_messages || 0;
+
+    // group by parent cwd (project)
+    const proj = byProject.get(s.cwd) || { cwd: s.cwd, sessions: 0, lines_added: 0, last_active: 0 };
+    proj.sessions += 1;
+    if (s.last_active > proj.last_active) proj.last_active = s.last_active;
+    byProject.set(s.cwd, proj);
+
+    // group by day from created_at
+    if (s.created_at) {
+      const day = s.created_at.slice(0, 10);
+      const bucket = byDay.get(day) || { day, sessions: 0, lines: 0, cost: 0 };
+      bucket.sessions += 1;
+      byDay.set(day, bucket);
+    }
+
+    // Walk hunk_records for lines + per-ext
+    let sessionLines = 0;
+    for await (const h of iterJsonl(path.join(s.path, 'hunk_records.jsonl'))) {
+      const fp = h.filePath || '';
+      if (!fp || fp.startsWith(s.path)) continue;
+      const added = Number(h.linesAdded || 0);
+      const removed = Number(h.linesRemoved || 0);
+      const et = h.eventType || 'added';
+      if (et === 'added') {
+        totals.lines_added += added;
+        totals.lines_removed += removed;
+        sessionLines += added;
+        filesUniverse.add(fp);
+        const ext = extBucket(fp);
+        byExt.set(ext, (byExt.get(ext) || 0) + added);
+      }
+    }
+    proj.lines_added += sessionLines;
+    if (s.created_at) {
+      const day = s.created_at.slice(0, 10);
+      const bucket = byDay.get(day);
+      if (bucket) bucket.lines += sessionLines;
+    }
+
+    // events.jsonl
+    for await (const e of iterJsonl(path.join(s.path, 'events.jsonl'))) {
+      const etype = e.type || '';
+      if (etype === 'turn_started') totals.turns_started += 1;
+      else if (etype === 'turn_ended') {
+        totals.turns_ended += 1;
+        if (e.outcome === 'error') totals.turns_error += 1;
+      } else if (etype === 'tool_started') {
+        totals.tools_started += 1;
+        const name = e.tool || e.tool_name || e.name || '?';
+        byTool.set(name, (byTool.get(name) || 0) + 1);
+      } else if (etype === 'permission_requested') {
+        totals.permission_prompts += 1;
+      }
+    }
+  }
+  totals.files_touched = filesUniverse.size;
+
+  // Tap captures aggregate
+  const allUsage = await listAllUsage();
+  for (const u of allUsage) {
+    totals.api_calls += 1;
+    totals.tokens_input += u.input_tokens;
+    totals.tokens_output += u.output_tokens;
+    totals.cost_usd += u.cost_usd;
+  }
+
+  // Top extensions, top tools, top projects
+  const topExt = Array.from(byExt.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([ext, lines]) => ({ ext, lines }));
+  const topTools = Array.from(byTool.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([name, count]) => ({ name, count }));
+  const topProjects = Array.from(byProject.values())
+    .sort((a, b) => b.lines_added - a.lines_added)
+    .slice(0, 15);
+
+  // Activity last 30 days (filled, even if zero)
+  const today = new Date();
+  const days = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today.getTime() - i * 86400 * 1000);
+    const key = d.toISOString().slice(0, 10);
+    const bucket = byDay.get(key) || { day: key, sessions: 0, lines: 0, cost: 0 };
+    days.push(bucket);
+  }
+
+  const out = { totals, top_extensions: topExt, top_tools: topTools, top_projects: topProjects, activity: days };
+  overviewCache = { ts: Date.now(), data: out };
+  return out;
+}
+
+// ------------ files in cwd + git history ------------
+
+const FILES_LIMIT = 200;
+const FILES_DEPTH = 5;
+const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.cache', '.venv', '__pycache__', '.pytest_cache', '.idea', '.vscode']);
+
+async function listCwdFiles(cwd) {
+  const out = [];
+  const baseSt = await safeStat(cwd);
+  if (!baseSt || !baseSt.isDirectory()) return { cwd, files: [], total_files: 0, exists: false };
+
+  async function walk(dir, depth) {
+    if (out.length >= FILES_LIMIT) return;
+    if (depth > FILES_DEPTH) return;
+    let entries;
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= FILES_LIMIT) return;
+      if (e.name.startsWith('.') && e.name !== '.gitignore' && e.name !== '.github') continue;
+      if (IGNORE_DIRS.has(e.name)) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        await walk(full, depth + 1);
+      } else if (e.isFile()) {
+        try {
+          const st = await fsp.stat(full);
+          const rel = path.relative(cwd, full);
+          out.push({
+            path: rel,
+            size: st.size,
+            mtime: st.mtimeMs,
+            ext: extBucket(full),
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+  await walk(cwd, 0);
+  out.sort((a, b) => b.mtime - a.mtime);
+  return { cwd, files: out, total_files: out.length, exists: true };
+}
+
+function runGit(cwd, args, opts = {}) {
+  return new Promise((resolve) => {
+    import('node:child_process').then(({ execFile }) => {
+      execFile('git', args, { cwd, maxBuffer: 8 * 1024 * 1024, timeout: 8000, ...opts }, (err, stdout, stderr) => {
+        if (err) resolve({ ok: false, stderr: String(stderr || err.message || '') });
+        else resolve({ ok: true, stdout: String(stdout || '') });
+      });
+    });
+  });
+}
+
+async function gitHistory(cwd) {
+  const baseSt = await safeStat(cwd);
+  if (!baseSt || !baseSt.isDirectory()) return { exists: false };
+  const gitDir = await safeStat(path.join(cwd, '.git'));
+  if (!gitDir) return { exists: true, is_repo: false };
+
+  const [branch, remote, logRaw, statusRaw] = await Promise.all([
+    runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    runGit(cwd, ['config', '--get', 'remote.origin.url']),
+    runGit(cwd, ['log', '-30', '--pretty=format:%H%x09%an%x09%ae%x09%aI%x09%s', '--shortstat']),
+    runGit(cwd, ['status', '--porcelain']),
+  ]);
+
+  const commits = [];
+  if (logRaw.ok) {
+    const lines = logRaw.stdout.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.includes('\t')) continue;
+      const parts = line.split('\t');
+      if (parts.length < 5) continue;
+      const [sha, an, ae, date, ...subjParts] = parts;
+      const subject = subjParts.join('\t');
+      // The next non-empty line may be the shortstat
+      let stat = { files: 0, insertions: 0, deletions: 0 };
+      for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+        const s = lines[j];
+        if (!s) continue;
+        if (s.includes('\t')) break; // next commit
+        const mFiles = s.match(/(\d+) files? changed/);
+        const mIns = s.match(/(\d+) insertion/);
+        const mDel = s.match(/(\d+) deletion/);
+        if (mFiles) stat.files = Number(mFiles[1]);
+        if (mIns) stat.insertions = Number(mIns[1]);
+        if (mDel) stat.deletions = Number(mDel[1]);
+        break;
+      }
+      commits.push({ sha: sha.slice(0, 8), author: an, email: ae, date, subject, stat });
+    }
+  }
+
+  let remoteUrl = remote.ok ? remote.stdout.trim() : null;
+  if (remoteUrl) {
+    remoteUrl = remoteUrl.replace(/^git@github\.com:/, 'https://github.com/').replace(/\.git$/, '');
+  }
+
+  const dirtyCount = statusRaw.ok ? statusRaw.stdout.split('\n').filter((l) => l.trim()).length : 0;
+
+  return {
+    exists: true,
+    is_repo: true,
+    branch: branch.ok ? branch.stdout.trim() : null,
+    remote_url: remoteUrl,
+    dirty_count: dirtyCount,
+    commits,
+  };
+}
+
 // ------------ express app ------------
 
 const app = express();
@@ -606,6 +855,43 @@ app.get('/api/active', async (_req, res) => {
     }
     const stats = await collectStats(sess);
     res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: String(err && err.message || err) });
+  }
+});
+
+app.get('/api/overview', async (_req, res) => {
+  try {
+    const data = await buildOverview();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: String(err && err.message || err) });
+  }
+});
+
+app.get('/api/session/:id/files', async (req, res) => {
+  try {
+    const sess = await findSessionById(req.params.id);
+    if (!sess) {
+      res.status(404).json({ error: 'session not found' });
+      return;
+    }
+    const data = await listCwdFiles(sess.cwd);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: String(err && err.message || err) });
+  }
+});
+
+app.get('/api/session/:id/git', async (req, res) => {
+  try {
+    const sess = await findSessionById(req.params.id);
+    if (!sess) {
+      res.status(404).json({ error: 'session not found' });
+      return;
+    }
+    const data = await gitHistory(sess.cwd);
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: String(err && err.message || err) });
   }
