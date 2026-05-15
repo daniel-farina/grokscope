@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { resolve } from 'node:path';
 
 export default defineConfig({
   server: {
@@ -10,13 +11,19 @@ export default defineConfig({
         target: 'http://127.0.0.1:7778',
         changeOrigin: true,
         ws: false,
-        // SSE needs no buffering
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes) => {
-            // Pass through SSE headers cleanly
             proxyRes.headers['cache-control'] = 'no-cache';
           });
         },
+      },
+    },
+  },
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        session: resolve(__dirname, 'session.html'),
       },
     },
   },

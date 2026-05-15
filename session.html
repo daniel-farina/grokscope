@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>grokscope - session</title>
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <a href="/" class="logo-mark" title="overview">
+            <svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5" fill="none"/><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M2 12 H6 M18 12 H22 M12 2 V6 M12 18 V22" stroke="currentColor" stroke-width="1.5"/></svg>
+          </a>
+          <div class="brand-text">
+            <a class="brand-name" href="/">grokscope</a>
+            <span class="brand-sub" id="session-title">no session</span>
+          </div>
+        </div>
+        <div class="session-head" id="session-head">
+          <div class="session-meta">
+            <span id="session-model" class="pill">-</span>
+            <span class="cwd-wrap">
+              <span id="session-cwd" class="cwd" title="">-</span>
+              <button class="copy-btn" id="copy-cwd" title="Copy path" aria-label="Copy path">
+                <svg viewBox="0 0 16 16" width="12" height="12"><rect x="4" y="4" width="9" height="10" rx="1.5" stroke="currentColor" fill="none" stroke-width="1.4"/><rect x="2.5" y="2" width="9" height="10" rx="1.5" stroke="currentColor" fill="none" stroke-width="1.4"/></svg>
+              </button>
+            </span>
+          </div>
+        </div>
+        <nav class="page-nav">
+          <a class="page-link" href="/">Overview</a>
+          <a class="page-link active" href="/session.html">Session</a>
+        </nav>
+        <div class="live-wrap">
+          <span class="live-dot" id="live-dot"></span>
+          <span class="live-text" id="live-text">connecting</span>
+        </div>
+      </header>
+
+      <section class="metrics-strip">
+        <div class="metric" data-tone="cyan">
+          <div class="metric-head">
+            <span class="metric-label">Context tokens</span>
+            <span class="metric-rate"><span id="m-token-rate">0</span> tok/s</span>
+          </div>
+          <div class="metric-value" id="m-tokens">0</div>
+          <svg class="spark" id="spark-tokens" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
+        </div>
+        <div class="metric" data-tone="green">
+          <div class="metric-head">
+            <span class="metric-label">Lines written</span>
+            <span class="metric-rate" id="m-loc-delta">+0</span>
+          </div>
+          <div class="metric-value" id="m-loc">0</div>
+          <svg class="spark" id="spark-loc" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
+        </div>
+        <div class="metric" data-tone="violet">
+          <div class="metric-head">
+            <span class="metric-label">Tools called</span>
+            <span class="metric-rate" id="m-tool-delta">+0</span>
+          </div>
+          <div class="metric-value" id="m-tools">0</div>
+          <svg class="spark" id="spark-tools" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
+        </div>
+        <div class="metric" data-tone="amber">
+          <div class="metric-head">
+            <span class="metric-label">API cost (USD)</span>
+            <span class="metric-rate" id="m-cost-calls">0 calls</span>
+          </div>
+          <div class="metric-value" id="m-cost">$0.00</div>
+          <svg class="spark" id="spark-cost" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
+        </div>
+        <div class="metric" data-tone="pink">
+          <div class="metric-head">
+            <span class="metric-label">Turns</span>
+            <span class="metric-rate" id="m-turn-errors">0 err</span>
+          </div>
+          <div class="metric-value" id="m-turns">0</div>
+          <svg class="spark" id="spark-turns" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
+        </div>
+      </section>
+
+      <main class="main">
+        <aside class="sidebar">
+          <div class="sidebar-title">
+            <span>Sessions</span>
+            <span class="sidebar-count" id="sidebar-count">0</span>
+          </div>
+          <div class="search-wrap">
+            <svg class="search-ic" viewBox="0 0 16 16" width="12" height="12"><circle cx="7" cy="7" r="4.5" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M10.5 10.5 L14 14" stroke="currentColor" stroke-width="1.4"/></svg>
+            <input type="text" class="search-input" id="session-search" placeholder="filter sessions" autocomplete="off" />
+            <button class="search-clear" id="session-search-clear" title="Clear" aria-label="Clear search" hidden>×</button>
+          </div>
+          <div class="session-list" id="session-list">loading...</div>
+        </aside>
+
+        <section class="panel">
+          <div class="cards">
+            <div class="card card-tokens">
+              <div class="card-label">Tokens</div>
+              <div class="card-value" id="card-tokens">0</div>
+              <div class="card-sub">
+                <span id="card-tps">0.00</span> tok/s
+                <span class="muted-sep"> · </span>
+                peak <span id="card-peak">0</span>
+              </div>
+            </div>
+            <div class="card card-loc">
+              <div class="card-label">Lines written</div>
+              <div class="card-value">
+                <span class="added" id="card-added">+0</span>
+                <span class="muted-sep">/</span>
+                <span class="removed" id="card-removed">-0</span>
+              </div>
+              <div class="card-sub">
+                net <span id="card-net">+0</span>
+                <span class="muted-sep"> · </span>
+                <span id="card-net-removed">-0</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-label">Files touched</div>
+              <div class="card-value" id="card-files">0</div>
+              <div class="card-sub" id="card-files-sub">-</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Turns</div>
+              <div class="card-value">
+                <span id="card-turns-started">0</span>
+                <span class="muted-sep">/</span>
+                <span class="muted" id="card-turns-ended">0</span>
+              </div>
+              <div class="card-sub">
+                err <span id="card-turns-error" class="removed">0</span>
+                <span class="muted-sep"> · </span>
+                prompts <span id="card-perms">0</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-label">Tools</div>
+              <div class="card-value">
+                <span id="card-tools-started">0</span>
+                <span class="muted-sep">/</span>
+                <span class="muted" id="card-tools-completed">0</span>
+              </div>
+              <div class="card-sub">
+                current
+                <span class="pill" id="card-current-tool">idle</span>
+              </div>
+            </div>
+            <div class="card card-usage">
+              <div class="card-label">API tokens (in / out)</div>
+              <div class="card-value">
+                <span class="usage-in" id="card-usage-in">0</span>
+                <span class="muted-sep">/</span>
+                <span class="usage-out" id="card-usage-out">0</span>
+              </div>
+              <div class="card-sub">
+                <span id="card-usage-calls">0</span> calls
+                <span class="muted-sep"> · </span>
+                cached <span id="card-usage-cached">0</span>
+                <span class="muted-sep"> · </span>
+                <span id="card-usage-cost">$0.00</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block block-wide">
+              <div class="block-head">
+                <h3>Tokens per API call (input vs output)</h3>
+                <div class="pager" id="usage-pager"></div>
+              </div>
+              <div id="usage-chart" class="usage-chart">loading...</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block">
+              <div class="block-head"><h3>Tool usage</h3></div>
+              <div id="tool-bars" class="bars">loading...</div>
+            </div>
+            <div class="block">
+              <div class="block-head"><h3>Lines by extension</h3></div>
+              <div id="ext-bars" class="bars">loading...</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block">
+              <div class="block-head">
+                <h3>Recent edits</h3>
+                <div class="pager" id="edits-pager"></div>
+              </div>
+              <div id="recent-edits" class="list">loading...</div>
+            </div>
+            <div class="block">
+              <div class="block-head">
+                <h3>API captures</h3>
+                <div class="pager" id="captures-pager"></div>
+              </div>
+              <div id="captures" class="list">loading...</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block">
+              <div class="block-head">
+                <h3>Files in working directory</h3>
+                <div class="pager" id="files-pager"></div>
+              </div>
+              <div id="files-list" class="list">loading...</div>
+            </div>
+            <div class="block">
+              <div class="block-head">
+                <h3>Git history <span class="branch-pill" id="git-branch"></span></h3>
+                <div class="pager" id="git-pager"></div>
+              </div>
+              <div id="git-list" class="list">loading...</div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footbar">
+        <span class="foot-label">session</span>
+        <span id="foot-session">-</span>
+        <span class="muted-sep"> · </span>
+        <span class="foot-label">last event</span>
+        <span id="foot-last-event">-</span>
+        <span class="foot-spacer"></span>
+        <a class="foot-link" href="https://github.com/daniel-farina/grokscope" target="_blank" rel="noopener">github</a>
+      </footer>
+    </div>
+    <script type="module" src="/src/session.js"></script>
+  </body>
+</html>
