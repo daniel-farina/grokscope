@@ -119,6 +119,27 @@ async function sessionLastActive(sessDir) {
   return latest;
 }
 
+// Parse subagent metadata records for a session.
+async function readSubagentMetas(sessPath) {
+  const dir = path.join(sessPath, 'subagents');
+  const st = await safeStat(dir);
+  if (!st) return [];
+  const out = [];
+  let entries;
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const meta = await readJson(path.join(dir, e.name, 'meta.json'));
+    if (!meta) continue;
+    out.push(meta);
+  }
+  return out;
+}
+
 async function listSessions() {
   const out = [];
   let cwdDirs;
@@ -143,6 +164,7 @@ async function listSessions() {
       const summary = await readJson(path.join(sessPath, 'summary.json'));
       if (!summary) continue;
       const lastActive = await sessionLastActive(sessPath);
+      const subagentMetas = await readSubagentMetas(sessPath);
       out.push({
         id: s.name,
         cwd,
@@ -157,9 +179,39 @@ async function listSessions() {
         created_at: summary.created_at || '',
         updated_at: summary.updated_at || '',
         last_active: lastActive,
+        subagent_metas: subagentMetas, // raw records from this session's own subagents/ dir
       });
     }
   }
+  // Annotate parent/child relationships.
+  // Each subagent meta carries parent_session_id and child_session_id (which can equal the
+  // subagent uuid). Build a reverse index from child -> {parent, meta} and then stamp each
+  // session with parent_id + the meta describing how its parent spawned it.
+  const childIndex = new Map();
+  for (const s of out) {
+    for (const meta of s.subagent_metas || []) {
+      const child = meta.child_session_id || meta.subagent_id;
+      if (child && !childIndex.has(child)) {
+        childIndex.set(child, { parent_id: s.id, meta });
+      }
+    }
+  }
+  for (const s of out) {
+    const link = childIndex.get(s.id);
+    if (link) {
+      s.parent_id = link.parent_id;
+      s.subagent_info = {
+        type: link.meta.subagent_type || null,
+        description: link.meta.description || null,
+        status: link.meta.status || null,
+        duration_ms: link.meta.duration_ms || 0,
+        turns: link.meta.turns || 0,
+        tool_calls: link.meta.tool_calls || 0,
+        child_cwd: link.meta.child_cwd || null,
+      };
+    }
+  }
+  // Sort: most-recent first, but children stay attached to their parents on the client.
   out.sort((a, b) => b.last_active - a.last_active);
   return out;
 }
@@ -521,6 +573,9 @@ app.get('/api/sessions', async (_req, res) => {
         last_active: new Date(s.last_active * 1000).toISOString(),
         num_messages: s.num_messages,
         is_worktree: s.cwd.startsWith(WORKTREES_PREFIX),
+        parent_id: s.parent_id || null,
+        subagent_info: s.subagent_info || null,
+        subagent_count: (s.subagent_metas || []).length,
       })),
     );
   } catch (err) {

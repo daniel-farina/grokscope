@@ -14,6 +14,7 @@ const state = {
   search: '',
   pages: { edits: 0, captures: 0, usage: 0 },
   captures: [],
+  collapsed: new Set(), // parent ids that are collapsed in the sidebar
   history: {
     tokens: [],
     loc: [],
@@ -136,13 +137,58 @@ async function loadSessions() {
   }
 }
 
+function sessionMatchesSearch(s, q) {
+  if (!q) return true;
+  const hay = [s.title, s.cwd, s.model, s.id, s.subagent_info?.description, s.subagent_info?.type]
+    .filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(q);
+}
+
+// Build a parent->children tree from the flat list.
+function buildSessionTree(list) {
+  const byId = new Map(list.map((s) => [s.id, s]));
+  const childrenOf = new Map();
+  const roots = [];
+  for (const s of list) {
+    if (s.parent_id && byId.has(s.parent_id)) {
+      const arr = childrenOf.get(s.parent_id) || [];
+      arr.push(s);
+      childrenOf.set(s.parent_id, arr);
+    } else {
+      roots.push(s);
+    }
+  }
+  // Sort children by their parent's spawn order (last_active desc keeps newer first).
+  for (const [, children] of childrenOf) children.sort((a, b) => b.last_active - a.last_active);
+  // If parent was filtered out by search, surface its child as a root so it doesn't vanish.
+  return { roots, childrenOf };
+}
+
 function filteredSessions() {
   const q = state.search.trim().toLowerCase();
   if (!q) return state.sessions;
-  return state.sessions.filter((s) => {
-    const hay = [s.title, s.cwd, s.model, s.id].filter(Boolean).join(' ').toLowerCase();
-    return hay.includes(q);
-  });
+  // Keep a session if it matches OR any of its descendants match (parents stay anchored).
+  const { childrenOf } = buildSessionTree(state.sessions);
+  const keep = new Set();
+  const markUp = (id) => {
+    if (keep.has(id)) return;
+    keep.add(id);
+    const s = state.sessions.find((x) => x.id === id);
+    if (s?.parent_id) markUp(s.parent_id);
+  };
+  for (const s of state.sessions) {
+    if (sessionMatchesSearch(s, q)) markUp(s.id);
+  }
+  // Also keep all children of kept parents (so a parent match shows its full subtree).
+  let added = true;
+  while (added) {
+    added = false;
+    for (const [pid, kids] of childrenOf) {
+      if (!keep.has(pid)) continue;
+      for (const k of kids) if (!keep.has(k.id)) { keep.add(k.id); added = true; }
+    }
+  }
+  return state.sessions.filter((s) => keep.has(s.id));
 }
 
 function renderSessions() {
@@ -158,11 +204,24 @@ function renderSessions() {
     root.appendChild(d);
     return;
   }
-  for (const s of list) {
+  const { roots, childrenOf } = buildSessionTree(list);
+
+  const renderNode = (s, depth) => {
+    const kids = childrenOf.get(s.id) || [];
+    const isCollapsed = state.collapsed.has(s.id);
+    const isSubagent = !!s.parent_id;
+    const info = s.subagent_info || null;
+
     const btn = document.createElement('button');
-    btn.className = 'sess-item' + (s.id === state.activeId ? ' active' : '') + (s.is_worktree ? ' worktree' : '');
+    btn.className = 'sess-item';
+    if (s.id === state.activeId) btn.classList.add('active');
+    if (isSubagent) btn.classList.add('subagent');
+    if (s.is_worktree && !isSubagent) btn.classList.add('worktree');
+    btn.style.setProperty('--depth', String(depth));
     btn.type = 'button';
-    btn.onclick = () => {
+    btn.onclick = (ev) => {
+      // ignore clicks on the chevron
+      if (ev.target.closest('.sess-chevron')) return;
       state.activeId = s.id;
       state.pinned = true;
       resetHistory();
@@ -170,26 +229,70 @@ function renderSessions() {
       renderSessions();
     };
 
+    const head = document.createElement('div');
+    head.className = 'sess-head';
+
+    if (kids.length) {
+      const chev = document.createElement('span');
+      chev.className = 'sess-chevron' + (isCollapsed ? ' collapsed' : '');
+      chev.textContent = isCollapsed ? '▶' : '▼';
+      chev.title = isCollapsed ? 'Expand subagents' : 'Collapse subagents';
+      chev.onclick = (ev) => {
+        ev.stopPropagation();
+        if (state.collapsed.has(s.id)) state.collapsed.delete(s.id);
+        else state.collapsed.add(s.id);
+        renderSessions();
+      };
+      head.appendChild(chev);
+    } else {
+      const sp = document.createElement('span');
+      sp.className = 'sess-chevron empty';
+      head.appendChild(sp);
+    }
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'sess-titles';
+
     const t = document.createElement('div');
     t.className = 'sess-title';
-    t.textContent = s.title || '(untitled)';
+    if (isSubagent && info?.description) {
+      t.textContent = info.description;
+    } else {
+      t.textContent = s.title || '(untitled)';
+    }
 
-    const c = document.createElement('div');
-    c.className = 'sess-cwd';
-    c.textContent = truncMid(s.cwd, 38);
-    c.title = s.cwd;
+    const sub = document.createElement('div');
+    sub.className = 'sess-sub';
+    if (isSubagent) {
+      const status = info?.status || '?';
+      const dur = info?.duration_ms ? ` · ${Math.round(info.duration_ms / 1000)}s` : '';
+      const tools = info?.tool_calls ? ` · ${info.tool_calls} tools` : '';
+      sub.innerHTML = `<span class="badge badge-${status}">${info?.type || 'subagent'}</span> <span class="badge-status">${status}</span>${dur}${tools}`;
+    } else {
+      sub.textContent = truncMid(s.cwd, 38);
+      sub.title = s.cwd;
+    }
 
     const m = document.createElement('div');
     m.className = 'sess-meta';
-    m.textContent = `${s.model || '?'} · ${s.num_messages || 0} msgs · ${fmtAgo(s.last_active)}`;
+    if (isSubagent) {
+      m.textContent = `${s.model || '?'} · ${s.num_messages || 0} msgs · ${fmtAgo(s.last_active)}`;
+    } else {
+      const kidCount = kids.length ? ` · ${kids.length} subagent${kids.length > 1 ? 's' : ''}` : '';
+      m.textContent = `${s.model || '?'} · ${s.num_messages || 0} msgs · ${fmtAgo(s.last_active)}${kidCount}`;
+    }
 
-    const id = document.createElement('div');
-    id.className = 'sess-id';
-    id.textContent = s.id.slice(0, 18);
-
-    btn.append(t, c, m, id);
+    titleWrap.append(t, sub, m);
+    head.appendChild(titleWrap);
+    btn.appendChild(head);
     root.appendChild(btn);
-  }
+
+    if (!isCollapsed) {
+      for (const k of kids) renderNode(k, depth + 1);
+    }
+  };
+
+  for (const r of roots) renderNode(r, 0);
 }
 
 function resetHistory() {
