@@ -1,5 +1,8 @@
 # grokscope
 
+> Third-party tooling for the [Grok CLI](https://docs.x.ai/build/overview).
+> Not affiliated with, endorsed by, or sponsored by xAI Corp.
+
 Live monitoring + observability for the [Grok CLI](https://docs.x.ai/build/overview).
 
 ![grokscope dashboard](docs/screenshot.png)
@@ -8,8 +11,6 @@ Live monitoring + observability for the [Grok CLI](https://docs.x.ai/build/overv
 and renders a live web dashboard with tokens, lines of code written, tool usage, and per-API-call
 input/output token breakdowns (including cost in USD) when you run alongside the included reverse
 proxy.
-
-It is third-party tooling, not affiliated with xAI.
 
 ## Why
 
