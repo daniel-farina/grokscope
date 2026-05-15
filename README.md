@@ -2,6 +2,8 @@
 
 Live monitoring + observability for the [Grok CLI](https://docs.x.ai/build/overview).
 
+![grokscope dashboard](docs/screenshot.png)
+
 `grokscope` watches the JSONL telemetry your local Grok sessions write to `~/.grok/sessions/`
 and renders a live web dashboard with tokens, lines of code written, tool usage, and per-API-call
 input/output token breakdowns (including cost in USD) when you run alongside the included reverse
