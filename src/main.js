@@ -1,6 +1,9 @@
-// Grok dashboard frontend - vanilla JS.
+// grokscope frontend - vanilla JS.
 
 const $ = (id) => document.getElementById(id);
+
+const HISTORY_MAX = 60; // sparkline buffer length (60s at 1 Hz)
+const PAGE_SIZE = 10;
 
 const state = {
   sessions: [],
@@ -8,12 +11,24 @@ const state = {
   pinned: false,
   evtSource: null,
   lastEventAt: 0,
+  search: '',
+  pages: { edits: 0, captures: 0, usage: 0 },
+  captures: [],
+  history: {
+    tokens: [],
+    loc: [],
+    tools: [],
+    cost: [],
+    turns: [],
+  },
+  lastStats: null,
 };
 
 function fmtNum(n) {
   if (n == null || Number.isNaN(n)) return '0';
   if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
-  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+  if (Math.abs(n) >= 10_000) return (n / 1_000).toFixed(1) + 'k';
+  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(2) + 'k';
   return Math.round(n).toLocaleString();
 }
 
@@ -45,6 +60,69 @@ function truncMid(s, max) {
   return s.slice(0, head) + '...' + s.slice(-tail);
 }
 
+function pushHistory(key, value) {
+  const arr = state.history[key];
+  arr.push(value);
+  if (arr.length > HISTORY_MAX) arr.shift();
+}
+
+function renderSpark(svgId, data, accent) {
+  const svg = $(svgId);
+  if (!svg) return;
+  svg.innerHTML = '';
+  if (!data.length) return;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = Math.max(1, max - min);
+  const w = 100, h = 30, pad = 1.5;
+  const usableH = h - pad * 2;
+  const step = data.length > 1 ? w / (data.length - 1) : w;
+
+  const points = data.map((v, i) => {
+    const x = i * step;
+    const y = pad + usableH - ((v - min) / range) * usableH;
+    return [x, y];
+  });
+
+  // Area fill
+  let area = `M ${points[0][0]} ${h} `;
+  for (const [x, y] of points) area += `L ${x} ${y} `;
+  area += `L ${points[points.length - 1][0]} ${h} Z`;
+
+  // Line
+  let line = `M ${points[0][0]} ${points[0][1]} `;
+  for (let i = 1; i < points.length; i++) line += `L ${points[i][0]} ${points[i][1]} `;
+
+  const ns = 'http://www.w3.org/2000/svg';
+  const gradId = svgId + '-grad';
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${accent}" stop-opacity="0.35" />
+        <stop offset="100%" stop-color="${accent}" stop-opacity="0" />
+      </linearGradient>
+    </defs>
+    <path d="${area}" fill="url(#${gradId})" />
+    <path d="${line}" fill="none" stroke="${accent}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+    <circle cx="${points[points.length - 1][0]}" cy="${points[points.length - 1][1]}" r="1.8" fill="${accent}" />
+  `;
+}
+
+// ---------- copy ----------
+
+async function copyText(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) {
+      btn.classList.add('copied');
+      setTimeout(() => btn.classList.remove('copied'), 900);
+    }
+  } catch {
+    // best-effort fallback: select and prompt
+    window.prompt('Copy path:', text);
+  }
+}
+
 // ---------- session list ----------
 
 async function loadSessions() {
@@ -58,23 +136,36 @@ async function loadSessions() {
   }
 }
 
+function filteredSessions() {
+  const q = state.search.trim().toLowerCase();
+  if (!q) return state.sessions;
+  return state.sessions.filter((s) => {
+    const hay = [s.title, s.cwd, s.model, s.id].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+}
+
 function renderSessions() {
   const root = $('session-list');
+  const cnt = $('sidebar-count');
   root.innerHTML = '';
-  if (!state.sessions.length) {
+  const list = filteredSessions();
+  cnt.textContent = list.length;
+  if (!list.length) {
     const d = document.createElement('div');
     d.className = 'empty';
-    d.textContent = 'no sessions found';
+    d.textContent = state.search ? 'no matches' : 'no sessions found';
     root.appendChild(d);
     return;
   }
-  for (const s of state.sessions) {
+  for (const s of list) {
     const btn = document.createElement('button');
     btn.className = 'sess-item' + (s.id === state.activeId ? ' active' : '') + (s.is_worktree ? ' worktree' : '');
     btn.type = 'button';
     btn.onclick = () => {
       state.activeId = s.id;
       state.pinned = true;
+      resetHistory();
       restartStream();
       renderSessions();
     };
@@ -86,6 +177,7 @@ function renderSessions() {
     const c = document.createElement('div');
     c.className = 'sess-cwd';
     c.textContent = truncMid(s.cwd, 38);
+    c.title = s.cwd;
 
     const m = document.createElement('div');
     m.className = 'sess-meta';
@@ -100,37 +192,49 @@ function renderSessions() {
   }
 }
 
+function resetHistory() {
+  for (const k of Object.keys(state.history)) state.history[k] = [];
+}
+
 // ---------- captures ----------
 
 async function loadCaptures() {
   try {
     const r = await fetch('/api/captures');
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    const rows = await r.json();
-    renderCaptures(rows);
+    state.captures = await r.json();
+    renderCaptures();
   } catch (e) {
     $('captures').textContent = 'error: ' + e.message;
   }
 }
 
-function renderCaptures(rows) {
+function renderCaptures() {
   const root = $('captures');
+  const pagerEl = $('captures-pager');
   root.innerHTML = '';
+  pagerEl.innerHTML = '';
+  const rows = state.captures;
   if (!rows.length) {
     const d = document.createElement('div');
     d.className = 'empty';
-    d.textContent = 'no captures (start grok-tap to record HTTP traffic)';
+    d.textContent = 'no captures yet. start grokscope-tap to record HTTP traffic.';
     root.appendChild(d);
     return;
   }
-  for (const r of rows.slice(0, 50)) {
+  const pages = Math.ceil(rows.length / PAGE_SIZE);
+  state.pages.captures = Math.min(state.pages.captures, pages - 1);
+  const start = state.pages.captures * PAGE_SIZE;
+  const slice = rows.slice(start, start + PAGE_SIZE);
+
+  for (const r of slice) {
     const row = document.createElement('div');
     row.className = 'capt-row';
     const status = Number(r.status || 0);
     const statusClass = status >= 200 && status < 400 ? 'status-ok' : 'status-bad';
     row.innerHTML = `
-      <span>${r.ts || ''}</span>
-      <span>${r.method || ''}</span>
+      <span class="capt-ts">${r.ts || ''}</span>
+      <span class="capt-method">${r.method || ''}</span>
       <span class="path" title="${r.path || ''}">${r.path || ''}</span>
       <span class="${statusClass}">${r.status ?? '-'}</span>
       <span class="muted">${r.elapsed_ms ?? '-'}ms</span>
@@ -138,17 +242,51 @@ function renderCaptures(rows) {
     `;
     root.appendChild(row);
   }
+  pagerEl.append(...buildPager(state.pages.captures, pages, (p) => {
+    state.pages.captures = p;
+    renderCaptures();
+  }, rows.length));
+}
+
+function buildPager(page, pages, onChange, total) {
+  if (pages <= 1) {
+    const span = document.createElement('span');
+    span.className = 'pager-info';
+    span.textContent = `${total} total`;
+    return [span];
+  }
+  const prev = document.createElement('button');
+  prev.className = 'pager-btn';
+  prev.type = 'button';
+  prev.textContent = '←';
+  prev.disabled = page <= 0;
+  prev.onclick = () => onChange(Math.max(0, page - 1));
+
+  const next = document.createElement('button');
+  next.className = 'pager-btn';
+  next.type = 'button';
+  next.textContent = '→';
+  next.disabled = page >= pages - 1;
+  next.onclick = () => onChange(Math.min(pages - 1, page + 1));
+
+  const info = document.createElement('span');
+  info.className = 'pager-info';
+  info.textContent = `${page + 1}/${pages} · ${total}`;
+
+  return [prev, info, next];
 }
 
 // ---------- stats render ----------
 
 function renderStats(stats) {
   if (!stats) return;
+  state.lastStats = stats;
   const m = stats.meta || {};
   const tk = stats.tokens || {};
   const lc = stats.loc || {};
   const fl = stats.flow || {};
   const tools = stats.tools || [];
+  const us = stats.usage || {};
 
   state.activeId = m.id;
   state.lastEventAt = Date.now();
@@ -156,16 +294,59 @@ function renderStats(stats) {
   // header
   $('session-title').textContent = m.title || '(untitled)';
   $('session-model').textContent = m.model || '?';
-  $('session-cwd').textContent = m.cwd || '';
-  $('session-cwd').title = m.cwd || '';
+  const cwd = m.cwd || '';
+  const cwdEl = $('session-cwd');
+  cwdEl.textContent = cwd;
+  cwdEl.title = cwd;
+  $('copy-cwd').dataset.copy = cwd;
   $('foot-session').textContent = m.id || '-';
   $('foot-last-event').textContent = fmtAgo(fl.last_event_ts);
 
-  // cards
+  // metrics strip - push to history then render
+  const tokensTotal = tk.last_total_tokens || 0;
+  const locTotal = lc.lines_added || 0;
+  const toolsTotal = fl.tools_started || 0;
+  const costTotal = us.cost_usd || 0;
+  const turnsTotal = fl.turns_started || 0;
+
+  // delta vs last sample for the rate readouts on the metric strip
+  const prev = {
+    tokens: state.history.tokens.at(-1) || 0,
+    loc: state.history.loc.at(-1) || 0,
+    tools: state.history.tools.at(-1) || 0,
+    cost: state.history.cost.at(-1) || 0,
+    turns: state.history.turns.at(-1) || 0,
+  };
+
+  pushHistory('tokens', tokensTotal);
+  pushHistory('loc', locTotal);
+  pushHistory('tools', toolsTotal);
+  pushHistory('cost', costTotal);
+  pushHistory('turns', turnsTotal);
+
+  $('m-tokens').textContent = fmtNum(tokensTotal);
+  $('m-token-rate').textContent = (tk.tokens_per_sec || 0).toFixed(1);
+  $('m-loc').textContent = fmtNum(locTotal);
+  const dLoc = locTotal - prev.loc;
+  $('m-loc-delta').textContent = (dLoc >= 0 ? '+' : '') + fmtNum(dLoc);
+  $('m-tools').textContent = fmtNum(toolsTotal);
+  const dTools = toolsTotal - prev.tools;
+  $('m-tool-delta').textContent = (dTools >= 0 ? '+' : '') + fmtNum(dTools);
+  $('m-cost').textContent = '$' + (costTotal).toFixed(4);
+  $('m-cost-calls').textContent = `${fmtNum(us.calls || 0)} calls`;
+  $('m-turns').textContent = fmtNum(turnsTotal);
+  $('m-turn-errors').textContent = `${fmtNum(fl.turns_error || 0)} err`;
+
+  renderSpark('spark-tokens', state.history.tokens, '#5eead4');
+  renderSpark('spark-loc', state.history.loc, '#86efac');
+  renderSpark('spark-tools', state.history.tools, '#c4b5fd');
+  renderSpark('spark-cost', state.history.cost, '#fbbf24');
+  renderSpark('spark-turns', state.history.turns, '#f9a8d4');
+
+  // big cards
   $('card-tokens').textContent = fmtNum(tk.last_total_tokens);
   $('card-tps').textContent = (tk.tokens_per_sec || 0).toFixed(2);
   $('card-peak').textContent = fmtNum(tk.peak_total_tokens);
-
   $('card-added').textContent = '+' + fmtNum(lc.lines_added);
   $('card-removed').textContent = '-' + fmtNum(lc.lines_removed);
   const net = lc.net_added - lc.net_removed;
@@ -188,14 +369,13 @@ function renderStats(stats) {
   $('card-tools-completed').textContent = fmtNum(fl.tools_completed);
   $('card-current-tool').textContent = fl.current_tool || 'idle';
 
-  const us = stats.usage || { calls: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, cost_usd: 0, per_call: [] };
-  $('card-usage-in').textContent = fmtNum(us.input_tokens);
-  $('card-usage-out').textContent = fmtNum(us.output_tokens);
-  $('card-usage-calls').textContent = fmtNum(us.calls);
-  $('card-usage-cached').textContent = fmtNum(us.cached_tokens);
+  $('card-usage-in').textContent = fmtNum(us.input_tokens || 0);
+  $('card-usage-out').textContent = fmtNum(us.output_tokens || 0);
+  $('card-usage-calls').textContent = fmtNum(us.calls || 0);
+  $('card-usage-cached').textContent = fmtNum(us.cached_tokens || 0);
   $('card-usage-cost').textContent = '$' + (us.cost_usd || 0).toFixed(4);
-  renderUsageChart(us.per_call || []);
 
+  renderUsageChart(us.per_call || []);
   renderBars($('tool-bars'), tools.slice(0, 12).map((t) => ({ name: t.name, value: t.count })));
   renderBars(
     $('ext-bars'),
@@ -204,15 +384,12 @@ function renderStats(stats) {
 
   renderRecentEdits(lc.recent_edits || []);
 
-  // update sidebar selection highlight without refetching
-  if (state.sessions.length) {
-    for (const el of document.querySelectorAll('.sess-item')) el.classList.remove('active');
-    const matchIndex = state.sessions.findIndex((s) => s.id === state.activeId);
-    if (matchIndex >= 0) {
-      const items = document.querySelectorAll('.sess-item');
-      if (items[matchIndex]) items[matchIndex].classList.add('active');
-    }
-  }
+  // sidebar selection highlight
+  for (const el of document.querySelectorAll('.sess-item')) el.classList.remove('active');
+  const items = document.querySelectorAll('.sess-item');
+  const list = filteredSessions();
+  const idx = list.findIndex((s) => s.id === state.activeId);
+  if (idx >= 0 && items[idx]) items[idx].classList.add('active');
 }
 
 function renderBars(root, items) {
@@ -240,43 +417,48 @@ function renderBars(root, items) {
 
 function renderUsageChart(calls) {
   const root = $('usage-chart');
+  const pagerEl = $('usage-pager');
   if (!root) return;
   root.innerHTML = '';
+  pagerEl.innerHTML = '';
   if (!calls.length) {
     const d = document.createElement('div');
     d.className = 'empty';
-    d.textContent = 'no captured API calls for this session. To capture: re-enable grok-tap by adding base_url = "http://127.0.0.1:18080/v1" to [model.grok-build] in ~/.grok/config.toml';
+    d.innerHTML = 'no captured API calls for this session. enable the tap by adding <code>base_url = "http://127.0.0.1:18080/v1"</code> under <code>[model.grok-build]</code> in <code>~/.grok/config.toml</code>.';
     root.appendChild(d);
     return;
   }
-  const maxTotal = Math.max(...calls.map((c) => c.input + c.output), 1);
   const totalIn = calls.reduce((s, c) => s + c.input, 0);
   const totalOut = calls.reduce((s, c) => s + c.output, 0);
 
-  // Legend
   const legend = document.createElement('div');
   legend.className = 'chart-legend';
   legend.innerHTML = `
     <span class="leg in"><i></i> input (${fmtNum(totalIn)})</span>
     <span class="leg out"><i></i> output (${fmtNum(totalOut)})</span>
-    <span class="leg reason"><i></i> of which reasoning</span>
-    <span class="leg cached"><i></i> of which cached input</span>
+    <span class="leg reason"><i></i> reasoning portion</span>
+    <span class="leg cached"><i></i> cached input portion</span>
   `;
   root.appendChild(legend);
 
-  // Bars
+  const pages = Math.ceil(calls.length / PAGE_SIZE);
+  state.pages.usage = Math.min(state.pages.usage, pages - 1);
+  const start = state.pages.usage * PAGE_SIZE;
+  const slice = calls.slice(start, start + PAGE_SIZE);
+  const maxTotal = Math.max(...calls.map((c) => c.input + c.output), 1);
+
   const list = document.createElement('div');
   list.className = 'chart-bars';
-  calls.forEach((c, i) => {
+  slice.forEach((c, i) => {
+    const idx = start + i + 1;
     const row = document.createElement('div');
     row.className = 'chart-row';
-    const total = c.input + c.output;
     const inPctOfMax = Math.round((c.input / maxTotal) * 100);
     const outPctOfMax = Math.round((c.output / maxTotal) * 100);
     const reasonPct = c.output ? Math.round((c.reasoning / c.output) * 100) : 0;
     const cachedPct = c.input ? Math.round((c.cached / c.input) * 100) : 0;
     row.innerHTML = `
-      <span class="chart-idx">#${i + 1}</span>
+      <span class="chart-idx">#${idx}</span>
       <div class="chart-stack" title="in ${fmtNum(c.input)} (cached ${fmtNum(c.cached)}) · out ${fmtNum(c.output)} (reasoning ${fmtNum(c.reasoning)}) · cost $${(c.cost_usd || 0).toFixed(4)}">
         <div class="seg seg-in" style="width:${inPctOfMax}%">
           <div class="seg-cached" style="width:${cachedPct}%"></div>
@@ -291,11 +473,17 @@ function renderUsageChart(calls) {
     list.appendChild(row);
   });
   root.appendChild(list);
+  pagerEl.append(...buildPager(state.pages.usage, pages, (p) => {
+    state.pages.usage = p;
+    renderUsageChart(calls);
+  }, calls.length));
 }
 
 function renderRecentEdits(edits) {
   const root = $('recent-edits');
+  const pagerEl = $('edits-pager');
   root.innerHTML = '';
+  pagerEl.innerHTML = '';
   if (!edits.length) {
     const d = document.createElement('div');
     d.className = 'empty';
@@ -303,7 +491,12 @@ function renderRecentEdits(edits) {
     root.appendChild(d);
     return;
   }
-  for (const e of edits) {
+  const pages = Math.ceil(edits.length / PAGE_SIZE);
+  state.pages.edits = Math.min(state.pages.edits, pages - 1);
+  const start = state.pages.edits * PAGE_SIZE;
+  const slice = edits.slice(start, start + PAGE_SIZE);
+
+  for (const e of slice) {
     const row = document.createElement('div');
     row.className = 'row-item';
     const filename = (e.filePath || '').split('/').pop() || '?';
@@ -317,6 +510,10 @@ function renderRecentEdits(edits) {
     `;
     root.appendChild(row);
   }
+  pagerEl.append(...buildPager(state.pages.edits, pages, (p) => {
+    state.pages.edits = p;
+    renderRecentEdits(edits);
+  }, edits.length));
 }
 
 // ---------- SSE ----------
@@ -357,15 +554,46 @@ function restartStream() {
   };
 }
 
-// ---------- bootstrap ----------
+// ---------- wiring ----------
+
+function wireUi() {
+  // search
+  const input = $('session-search');
+  const clear = $('session-search-clear');
+  const apply = () => {
+    state.search = input.value;
+    clear.hidden = !input.value;
+    renderSessions();
+  };
+  input.addEventListener('input', apply);
+  clear.addEventListener('click', () => {
+    input.value = '';
+    apply();
+    input.focus();
+  });
+  // global keyboard shortcut: / focuses search
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== input) {
+      e.preventDefault();
+      input.focus();
+    }
+  });
+
+  // copy cwd
+  $('copy-cwd').addEventListener('click', (ev) => {
+    const btn = ev.currentTarget;
+    const path = btn.dataset.copy || '';
+    if (path) copyText(path, btn);
+  });
+}
 
 async function init() {
+  wireUi();
   await Promise.all([loadSessions(), loadCaptures()]);
   restartStream();
   setInterval(loadSessions, 5000);
   setInterval(loadCaptures, 5000);
   setInterval(() => {
-    // gentle staleness check
     if (state.lastEventAt && Date.now() - state.lastEventAt > 4000) {
       setLive(false, 'stale');
     }
