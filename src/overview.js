@@ -5,7 +5,7 @@ import {
   loadSidebarSessions, wireSidebar,
 } from './common.js';
 
-const VALID_RANGES = ['1m', '30m', '24h', '7d', '30d', '90d', 'all'];
+const VALID_RANGES = ['1m', '5m', '30m', '24h', '7d', '30d', '90d', 'all'];
 const LS_RANGE_KEY = 'grokscope.overview.range';
 const LS_LIVE_KEY = 'grokscope.overview.live';
 
@@ -37,6 +37,7 @@ const state = {
 
 const RANGE_TITLES = {
   '1m':  'Activity (last 1 minute)',
+  '5m':  'Activity (last 5 minutes)',
   '30m': 'Activity (last 30 minutes)',
   '24h': 'Activity (last 24 hours)',
   '7d':  'Activity (last 7 days)',

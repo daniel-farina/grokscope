@@ -559,6 +559,7 @@ const overviewCache = new Map(); // range -> { ts, data }
 
 const OVERVIEW_RANGES = {
   '1m':  { window_ms: 60 * 1000,              bucket_ms: 2 * 1000,          label: '1 minute' },
+  '5m':  { window_ms: 5 * 60 * 1000,          bucket_ms: 10 * 1000,         label: '5 minutes' },
   '30m': { window_ms: 30 * 60 * 1000,         bucket_ms: 60 * 1000,         label: '30 minutes' },
   '24h': { window_ms: 24 * 3600 * 1000,       bucket_ms: 60 * 60 * 1000,    label: '24 hours' },
   '7d':  { window_ms: 7 * 86400 * 1000,       bucket_ms: 60 * 60 * 1000,    label: '7 days' },
