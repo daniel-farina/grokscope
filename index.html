@@ -81,6 +81,7 @@
           <div class="range-bar">
             <span class="range-label">Time range</span>
             <div class="range-pills" id="range-pills">
+              <button class="range-pill" data-range="1m">1m</button>
               <button class="range-pill" data-range="30m">30m</button>
               <button class="range-pill" data-range="24h">24h</button>
               <button class="range-pill" data-range="7d">7d</button>
@@ -88,6 +89,11 @@
               <button class="range-pill" data-range="90d">90d</button>
               <button class="range-pill" data-range="all">All time</button>
             </div>
+            <button class="live-toggle on" id="live-toggle" title="Toggle live updates">
+              <span class="live-toggle-dot"></span>
+              <span class="live-toggle-text">Live</span>
+              <span class="live-toggle-rate" id="live-toggle-rate">3s</span>
+            </button>
           </div>
 
           <div class="row">

@@ -5,8 +5,12 @@ import {
   loadSidebarSessions, wireSidebar,
 } from './common.js';
 
-const VALID_RANGES = ['30m', '24h', '7d', '30d', '90d', 'all'];
+const VALID_RANGES = ['1m', '30m', '24h', '7d', '30d', '90d', 'all'];
 const LS_RANGE_KEY = 'grokscope.overview.range';
+const LS_LIVE_KEY = 'grokscope.overview.live';
+
+const LIVE_INTERVAL_MS = 3000;   // poll cadence when live mode is on
+const IDLE_INTERVAL_MS = 60000;  // poll cadence when live mode is off
 
 function loadSavedRange() {
   try {
@@ -16,9 +20,23 @@ function loadSavedRange() {
   return '30d';
 }
 
-const state = { overview: null, range: loadSavedRange() };
+function loadSavedLive() {
+  try {
+    const v = localStorage.getItem(LS_LIVE_KEY);
+    if (v === '0' || v === 'false') return false;
+  } catch {}
+  return true; // default to on
+}
+
+const state = {
+  overview: null,
+  range: loadSavedRange(),
+  live: loadSavedLive(),
+  pollTimer: null,
+};
 
 const RANGE_TITLES = {
+  '1m':  'Activity (last 1 minute)',
   '30m': 'Activity (last 30 minutes)',
   '24h': 'Activity (last 24 hours)',
   '7d':  'Activity (last 7 days)',
@@ -29,16 +47,46 @@ const RANGE_TITLES = {
 
 async function loadOverview() {
   try {
-    const r = await fetch('/api/overview?range=' + encodeURIComponent(state.range));
+    const params = new URLSearchParams({ range: state.range });
+    if (state.live) params.set('fresh', '1');
+    const r = await fetch('/api/overview?' + params.toString());
     if (!r.ok) throw new Error('HTTP ' + r.status);
     state.overview = await r.json();
-    setLive(true, `${state.overview.totals.sessions} sessions tracked`);
+    const status = state.live
+      ? `${state.overview.totals.sessions} sessions · live`
+      : `${state.overview.totals.sessions} sessions · paused`;
+    setLive(true, status);
     renderOverview();
   } catch (e) {
     setLive(false, 'error');
     const root = $('overview-projects');
     if (root) root.textContent = 'error: ' + e.message;
   }
+}
+
+function applyLiveUI() {
+  const btn = $('live-toggle');
+  if (btn) {
+    btn.classList.toggle('on', state.live);
+    btn.title = state.live ? 'Live updates on (click to pause)' : 'Paused (click to resume)';
+  }
+  const rate = $('live-toggle-rate');
+  if (rate) rate.textContent = state.live ? `${LIVE_INTERVAL_MS / 1000}s` : 'off';
+}
+
+function setLiveMode(on) {
+  if (state.live === on) return;
+  state.live = on;
+  try { localStorage.setItem(LS_LIVE_KEY, on ? '1' : '0'); } catch {}
+  applyLiveUI();
+  restartPolling();
+  if (on) loadOverview(); // fire one immediately when re-enabling
+}
+
+function restartPolling() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  const interval = state.live ? LIVE_INTERVAL_MS : IDLE_INTERVAL_MS;
+  state.pollTimer = setInterval(loadOverview, interval);
 }
 
 function applyRangePillUI(key) {
@@ -221,12 +269,27 @@ function renderActivityGrid(act) {
 async function init() {
   wireSidebar();
   applyRangePillUI(state.range);
+  applyLiveUI();
   for (const b of document.querySelectorAll('.range-pill')) {
     b.addEventListener('click', () => setRange(b.dataset.range));
   }
+  const liveBtn = $('live-toggle');
+  if (liveBtn) liveBtn.addEventListener('click', () => setLiveMode(!state.live));
+
+  // Pause polling while the tab is hidden to save cycles
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (state.pollTimer) clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    } else {
+      loadOverview();
+      restartPolling();
+    }
+  });
+
   await Promise.all([loadSidebarSessions(), loadOverview()]);
   setInterval(loadSidebarSessions, 5000);
-  setInterval(loadOverview, 15000);
+  restartPolling();
 }
 
 init();

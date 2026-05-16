@@ -558,6 +558,7 @@ const OVERVIEW_TTL_MS = 60 * 1000;
 const overviewCache = new Map(); // range -> { ts, data }
 
 const OVERVIEW_RANGES = {
+  '1m':  { window_ms: 60 * 1000,              bucket_ms: 2 * 1000,          label: '1 minute' },
   '30m': { window_ms: 30 * 60 * 1000,         bucket_ms: 60 * 1000,         label: '30 minutes' },
   '24h': { window_ms: 24 * 3600 * 1000,       bucket_ms: 60 * 60 * 1000,    label: '24 hours' },
   '7d':  { window_ms: 7 * 86400 * 1000,       bucket_ms: 60 * 60 * 1000,    label: '7 days' },
@@ -566,11 +567,13 @@ const OVERVIEW_RANGES = {
   'all': { window_ms: null,                   bucket_ms: 86400 * 1000,      label: 'all time' },
 };
 
-async function buildOverview(rangeKey = '90d') {
+async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
   const cfg = OVERVIEW_RANGES[rangeKey] || OVERVIEW_RANGES['90d'];
-  const cached = overviewCache.get(rangeKey);
-  if (cached && Date.now() - cached.ts < OVERVIEW_TTL_MS) {
-    return cached.data;
+  if (!fresh) {
+    const cached = overviewCache.get(rangeKey);
+    if (cached && Date.now() - cached.ts < OVERVIEW_TTL_MS) {
+      return cached.data;
+    }
   }
   const sessions = await listSessions();
   const totals = {
@@ -976,7 +979,8 @@ app.get('/api/active', async (_req, res) => {
 app.get('/api/overview', async (req, res) => {
   try {
     const rangeKey = typeof req.query.range === 'string' ? req.query.range : '90d';
-    const data = await buildOverview(rangeKey);
+    const fresh = req.query.fresh === '1' || req.query.fresh === 'true';
+    const data = await buildOverview(rangeKey, { fresh });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: String(err && err.message || err) });
