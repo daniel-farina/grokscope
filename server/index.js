@@ -689,6 +689,18 @@ async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
     ? nowMs - cfg.window_ms
     : (events.length ? events[0].ts : nowMs);
 
+  // Seed cumulative running totals with everything BEFORE the window so the
+  // cumulative chart shows the historical baseline (and grows from there).
+  // Without this, a 1m / 30m view of an idle minute would draw a flat line
+  // at 0 instead of at the all-time total.
+  let cumLines = 0, cumCost = 0, cumSessions = 0;
+  for (const e of events) {
+    if (e.ts >= cutoff) break;
+    if (e.lines) cumLines += e.lines;
+    if (e.cost) cumCost += e.cost;
+    if (e.sessions) cumSessions += e.sessions;
+  }
+
   const aggBuckets = new Map();
   for (const e of events) {
     if (e.ts < cutoff) continue;
@@ -706,7 +718,6 @@ async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
   const startBucket = Math.floor(cutoff / cfg.bucket_ms) * cfg.bucket_ms;
   const endBucket = Math.floor(nowMs / cfg.bucket_ms) * cfg.bucket_ms;
   const days = [];
-  let cumLines = 0, cumCost = 0, cumSessions = 0;
   for (let t = startBucket; t <= endBucket; t += cfg.bucket_ms) {
     const b = aggBuckets.get(t) || { ts: t, sessions: 0, lines: 0, cost: 0 };
     cumLines += b.lines;
