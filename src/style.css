@@ -52,20 +52,23 @@ body {
 
 #app {
   display: grid;
-  grid-template-rows: 56px auto 1fr 28px;
-  height: 100vh;
+  grid-template-rows: 56px auto auto 1fr 28px;
+  min-height: 100vh;
 }
 
 /* ---------- top bar ---------- */
 .topbar {
   display: grid;
-  grid-template-columns: 280px 1fr auto;
+  grid-template-columns: 280px 1fr auto auto;
   align-items: center;
   gap: 24px;
   padding: 0 20px;
-  background: linear-gradient(to bottom, rgba(255,255,255,0.025), rgba(255,255,255,0));
+  background: linear-gradient(to bottom, rgba(11,13,16,0.95), rgba(11,13,16,0.85));
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 .brand { display: flex; align-items: center; gap: 12px; }
 .logo-mark {
@@ -197,7 +200,6 @@ body {
   display: grid;
   grid-template-columns: 280px 1fr;
   gap: 0;
-  overflow: hidden;
   min-height: 0;
 }
 
@@ -207,6 +209,10 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
 }
 .sidebar-title {
   padding: 14px 16px 8px;
@@ -366,11 +372,10 @@ body {
 
 /* ---------- panel ---------- */
 .panel {
-  overflow: auto;
   padding: 16px 20px 32px;
   display: flex; flex-direction: column;
   gap: 16px;
-  min-height: 0;
+  min-width: 0;
 }
 
 .cards {
@@ -723,9 +728,11 @@ body {
 .activity-strip-large {
   display: grid;
   grid-template-columns: repeat(45, 1fr);
-  grid-auto-rows: 1fr;
   gap: 3px;
   padding: 4px 0;
+}
+.activity-strip-large .act-cell {
+  aspect-ratio: 1;
 }
 .hint {
   font-family: var(--mono);
