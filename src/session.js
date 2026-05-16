@@ -240,7 +240,7 @@ function renderUsageChart(calls) {
     const cachedPct = c.input ? Math.round((c.cached / c.input) * 100) : 0;
     row.innerHTML = `
       <span class="chart-idx">#${idx}</span>
-      <div class="chart-stack" title="in ${fmtNum(c.input)} (cached ${fmtNum(c.cached)}) · out ${fmtNum(c.output)} (reasoning ${fmtNum(c.reasoning)}) · cost $${(c.cost_usd || 0).toFixed(4)}">
+      <div class="chart-stack" title="in ${fmtNum(c.input)} (cached ${fmtNum(c.cached)}) · out ${fmtNum(c.output)} (reasoning ${fmtNum(c.reasoning)})">
         <div class="seg seg-in" style="width:${inPctOfMax}%">
           <div class="seg-cached" style="width:${cachedPct}%"></div>
         </div>
@@ -249,7 +249,6 @@ function renderUsageChart(calls) {
         </div>
       </div>
       <span class="chart-val"><span class="usage-in">${fmtNum(c.input)}</span> / <span class="usage-out">${fmtNum(c.output)}</span></span>
-      <span class="chart-cost">$${(c.cost_usd || 0).toFixed(3)}</span>
     `;
     list.appendChild(row);
   });
@@ -344,15 +343,12 @@ function renderStats(stats) {
   $('m-tools').textContent = fmtNum(toolsTotal);
   const dTools = toolsTotal - prev.tools;
   $('m-tool-delta').textContent = (dTools >= 0 ? '+' : '') + fmtNum(dTools);
-  $('m-cost').textContent = '$' + costTotal.toFixed(4);
-  $('m-cost-calls').textContent = `${fmtNum(us.calls || 0)} calls`;
   $('m-turns').textContent = fmtNum(turnsTotal);
   $('m-turn-errors').textContent = `${fmtNum(fl.turns_error || 0)} err`;
 
   renderSpark($('spark-tokens'), state.history.tokens, '#5eead4');
   renderSpark($('spark-loc'), state.history.loc, '#86efac');
   renderSpark($('spark-tools'), state.history.tools, '#c4b5fd');
-  renderSpark($('spark-cost'), state.history.cost, '#fbbf24');
   renderSpark($('spark-turns'), state.history.turns, '#f9a8d4');
 
   $('card-tokens').textContent = fmtNum(tk.last_total_tokens);
@@ -384,7 +380,7 @@ function renderStats(stats) {
   $('card-usage-out').textContent = fmtNum(us.output_tokens || 0);
   $('card-usage-calls').textContent = fmtNum(us.calls || 0);
   $('card-usage-cached').textContent = fmtNum(us.cached_tokens || 0);
-  $('card-usage-cost').textContent = '$' + (us.cost_usd || 0).toFixed(4);
+  // (api cost intentionally not displayed - removed from UI)
 
   renderUsageChart(us.per_call || []);
   renderBars($('tool-bars'), tools.slice(0, 12).map((t) => ({ name: t.name, value: t.count })));

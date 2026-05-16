@@ -72,15 +72,12 @@ function renderOverview() {
   $('m-loc-delta').textContent = `${fmtNum(t.files_touched)} files`;
   $('m-tools').textContent = fmtNum(t.tools_started);
   $('m-tool-delta').textContent = `${fmtNum(t.turns_started)} turns`;
-  $('m-cost').textContent = '$' + (t.cost_usd || 0).toFixed(4);
-  $('m-cost-calls').textContent = `${fmtNum(t.api_calls)} calls`;
   $('m-turns').textContent = fmtNum(t.sessions);
   $('m-turn-errors').textContent = `${t.main_sessions} main · ${t.subagents} sub`;
 
   renderSpark($('spark-tokens'), act.map((d) => d.sessions), '#5eead4');
   renderSpark($('spark-loc'), act.map((d) => d.lines), '#86efac');
   renderSpark($('spark-tools'), act.map((d) => d.sessions), '#c4b5fd');
-  renderSpark($('spark-cost'), act.map((d) => d.cost), '#fbbf24');
   renderSpark($('spark-turns'), act.map((d) => d.sessions), '#f9a8d4');
 
   // Secondary KPIs
@@ -95,7 +92,7 @@ function renderOverview() {
 
   // Activity heatmap
   renderActivityGrid(act);
-  $('activity-summary').textContent = `${act.reduce((s, d) => s + d.sessions, 0)} sessions · ${fmtNum(act.reduce((s, d) => s + d.lines, 0))} lines · $${act.reduce((s, d) => s + d.cost, 0).toFixed(2)}`;
+  $('activity-summary').textContent = `${act.reduce((s, d) => s + d.sessions, 0)} sessions · ${fmtNum(act.reduce((s, d) => s + d.lines, 0))} lines`;
 
   // Chart titles follow the bucket granularity
   const bucketMs = ov.range?.bucket_ms || 86400000;
@@ -109,15 +106,11 @@ function renderOverview() {
   $('chart-cum-lines-title').textContent = rangeLabel
     ? `Cumulative lines (${rangeLabel})`
     : 'Cumulative lines';
-  $('chart-cum-cost-title').textContent = rangeLabel
-    ? `Cumulative cost (${rangeLabel})`
-    : 'Cumulative cost';
 
   // Line charts
   renderLineChart($('chart-sessions'), act.map((d) => ({ x: d.day, y: d.sessions })), { accent: '#79c0ff', area: true });
   renderLineChart($('chart-lines'), act.map((d) => ({ x: d.day, y: d.lines })), { accent: '#86efac', area: true });
   renderLineChart($('chart-cum-lines'), act.map((d) => ({ x: d.day, y: d.cum_lines })), { accent: '#5eead4', area: true });
-  renderLineChart($('chart-cum-cost'), act.map((d) => ({ x: d.day, y: d.cum_cost })), { accent: '#fbbf24', area: true });
 
   // Top projects with mini progress bars
   const projRoot = $('overview-projects');
@@ -220,7 +213,7 @@ function renderActivityGrid(act) {
     cell.className = 'act-cell';
     const intensity = Math.min(4, Math.floor((day.lines / maxLines) * 5));
     cell.dataset.level = String(day.lines === 0 ? 0 : Math.max(1, intensity));
-    cell.title = `${day.day}: ${day.sessions} sessions, ${day.lines} lines, $${day.cost.toFixed(2)}`;
+    cell.title = `${day.day}: ${day.sessions} sessions, ${day.lines} lines`;
     root.appendChild(cell);
   }
 }

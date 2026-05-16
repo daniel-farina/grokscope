@@ -30,7 +30,7 @@
         </div>
       </header>
 
-      <section class="metrics-strip">
+      <section class="metrics-strip primary-4">
         <div class="metric" data-tone="cyan">
           <div class="metric-head"><span class="metric-label">Tokens used</span><span class="metric-rate" id="m-token-rate">all time</span></div>
           <div class="metric-value" id="m-tokens">0</div>
@@ -45,11 +45,6 @@
           <div class="metric-head"><span class="metric-label">Tools called</span><span class="metric-rate" id="m-tool-delta">0 turns</span></div>
           <div class="metric-value" id="m-tools">0</div>
           <svg class="spark" id="spark-tools" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
-        </div>
-        <div class="metric" data-tone="amber">
-          <div class="metric-head"><span class="metric-label">API cost</span><span class="metric-rate" id="m-cost-calls">0 calls</span></div>
-          <div class="metric-value" id="m-cost">$0.00</div>
-          <svg class="spark" id="spark-cost" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
         </div>
         <div class="metric" data-tone="pink">
           <div class="metric-head"><span class="metric-label">Sessions</span><span class="metric-rate" id="m-turn-errors">0 main · 0 sub</span></div>
@@ -114,13 +109,9 @@
           </div>
 
           <div class="row">
-            <div class="block">
+            <div class="block block-wide">
               <div class="block-head"><h3 id="chart-cum-lines-title">Cumulative lines</h3></div>
               <svg id="chart-cum-lines" class="chart-svg" preserveAspectRatio="none"></svg>
-            </div>
-            <div class="block">
-              <div class="block-head"><h3 id="chart-cum-cost-title">Cumulative cost</h3></div>
-              <svg id="chart-cum-cost" class="chart-svg" preserveAspectRatio="none"></svg>
             </div>
           </div>
 

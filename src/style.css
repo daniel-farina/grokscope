@@ -152,6 +152,7 @@ body {
   border-bottom: 1px solid var(--border);
   background: var(--bg-1);
 }
+.metrics-strip.primary-4 { grid-template-columns: repeat(4, 1fr); }
 .metric {
   position: relative;
   background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
@@ -549,7 +550,7 @@ body {
 .usage-chart .chart-bars { display: flex; flex-direction: column; gap: 5px; }
 .usage-chart .chart-row {
   display: grid;
-  grid-template-columns: 40px 1fr 150px 60px;
+  grid-template-columns: 40px 1fr 150px;
   align-items: center;
   gap: 10px;
   font-family: var(--mono);
