@@ -83,9 +83,21 @@
         </aside>
 
         <section class="panel">
+          <div class="range-bar">
+            <span class="range-label">Time range</span>
+            <div class="range-pills" id="range-pills">
+              <button class="range-pill" data-range="30m">30m</button>
+              <button class="range-pill" data-range="24h">24h</button>
+              <button class="range-pill" data-range="7d">7d</button>
+              <button class="range-pill active" data-range="30d">30d</button>
+              <button class="range-pill" data-range="90d">90d</button>
+              <button class="range-pill" data-range="all">All time</button>
+            </div>
+          </div>
+
           <div class="row">
             <div class="block block-wide">
-              <div class="block-head"><h3>Activity (last 90 days)</h3><span class="hint" id="activity-summary"></span></div>
+              <div class="block-head"><h3 id="activity-title">Activity (last 30 days)</h3><span class="hint" id="activity-summary"></span></div>
               <div id="overview-activity" class="activity-strip-large">loading...</div>
             </div>
           </div>

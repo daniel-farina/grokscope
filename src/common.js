@@ -151,13 +151,22 @@ export function renderLineChart(svg, data, opts = {}) {
       yTicks += `<text x="${padL - 4}" y="${yy + 3}" fill="#6b7785" font-size="9" font-family="ui-monospace,monospace" text-anchor="end">${formatTick(v)}</text>`;
     }
   }
-  // x-axis labels: first, middle, last
+  // x-axis labels: first, middle, last - format depends on the value shape
   let xTicks = '';
   if (labels && data.length > 1) {
     const pick = [0, Math.floor(data.length / 2), data.length - 1];
     for (const i of pick) {
       const x = padL + i * stepX;
-      const lbl = String(data[i].x || '').slice(-5);
+      const raw = String(data[i].x || '');
+      // ISO-like with time -> show HH:MM ; date-only -> show MM-DD
+      let lbl;
+      if (raw.length >= 13 && raw.includes('T')) {
+        lbl = raw.slice(11, 16);
+      } else if (raw.length >= 10) {
+        lbl = raw.slice(5, 10);
+      } else {
+        lbl = raw.slice(-5);
+      }
       xTicks += `<text x="${x}" y="${h - 4}" fill="#6b7785" font-size="9" font-family="ui-monospace,monospace" text-anchor="middle">${lbl}</text>`;
     }
   }

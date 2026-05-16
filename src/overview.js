@@ -5,11 +5,20 @@ import {
   loadSidebarSessions, wireSidebar,
 } from './common.js';
 
-const state = { overview: null };
+const state = { overview: null, range: '30d' };
+
+const RANGE_TITLES = {
+  '30m': 'Activity (last 30 minutes)',
+  '24h': 'Activity (last 24 hours)',
+  '7d':  'Activity (last 7 days)',
+  '30d': 'Activity (last 30 days)',
+  '90d': 'Activity (last 90 days)',
+  'all': 'Activity (all time)',
+};
 
 async function loadOverview() {
   try {
-    const r = await fetch('/api/overview');
+    const r = await fetch('/api/overview?range=' + encodeURIComponent(state.range));
     if (!r.ok) throw new Error('HTTP ' + r.status);
     state.overview = await r.json();
     setLive(true, `${state.overview.totals.sessions} sessions tracked`);
@@ -19,6 +28,18 @@ async function loadOverview() {
     const root = $('overview-projects');
     if (root) root.textContent = 'error: ' + e.message;
   }
+}
+
+function setRange(key) {
+  if (state.range === key) return;
+  state.range = key;
+  for (const b of document.querySelectorAll('.range-pill')) {
+    b.classList.toggle('active', b.dataset.range === key);
+  }
+  const title = RANGE_TITLES[key] || `Activity (${key})`;
+  const tEl = $('activity-title');
+  if (tEl) tEl.textContent = title;
+  loadOverview();
 }
 
 function renderOverview() {
@@ -174,6 +195,9 @@ function renderActivityGrid(act) {
 
 async function init() {
   wireSidebar();
+  for (const b of document.querySelectorAll('.range-pill')) {
+    b.addEventListener('click', () => setRange(b.dataset.range));
+  }
   await Promise.all([loadSidebarSessions(), loadOverview()]);
   setInterval(loadSidebarSessions, 5000);
   setInterval(loadOverview, 15000);

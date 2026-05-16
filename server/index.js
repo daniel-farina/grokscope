@@ -555,11 +555,22 @@ async function usageForSession(sess) {
 // ------------ overview (all-time aggregates) ------------
 
 const OVERVIEW_TTL_MS = 60 * 1000;
-let overviewCache = { ts: 0, data: null };
+const overviewCache = new Map(); // range -> { ts, data }
 
-async function buildOverview() {
-  if (Date.now() - overviewCache.ts < OVERVIEW_TTL_MS && overviewCache.data) {
-    return overviewCache.data;
+const OVERVIEW_RANGES = {
+  '30m': { window_ms: 30 * 60 * 1000,         bucket_ms: 60 * 1000,         label: '30 minutes' },
+  '24h': { window_ms: 24 * 3600 * 1000,       bucket_ms: 60 * 60 * 1000,    label: '24 hours' },
+  '7d':  { window_ms: 7 * 86400 * 1000,       bucket_ms: 60 * 60 * 1000,    label: '7 days' },
+  '30d': { window_ms: 30 * 86400 * 1000,      bucket_ms: 86400 * 1000,      label: '30 days' },
+  '90d': { window_ms: 90 * 86400 * 1000,      bucket_ms: 86400 * 1000,      label: '90 days' },
+  'all': { window_ms: null,                   bucket_ms: 86400 * 1000,      label: 'all time' },
+};
+
+async function buildOverview(rangeKey = '90d') {
+  const cfg = OVERVIEW_RANGES[rangeKey] || OVERVIEW_RANGES['90d'];
+  const cached = overviewCache.get(rangeKey);
+  if (cached && Date.now() - cached.ts < OVERVIEW_TTL_MS) {
+    return cached.data;
   }
   const sessions = await listSessions();
   const totals = {
@@ -584,7 +595,8 @@ async function buildOverview() {
   const byExt = new Map();
   const byTool = new Map();
   const byProject = new Map();
-  const byDay = new Map(); // YYYY-MM-DD -> { sessions, lines, cost }
+  // Timestamped events used to build the activity chart at any granularity.
+  const events = []; // {ts: ms, sessions?, lines?, cost?}
 
   for (const s of sessions) {
     if (s.parent_id) totals.subagents += 1;
@@ -597,15 +609,11 @@ async function buildOverview() {
     if (s.last_active > proj.last_active) proj.last_active = s.last_active;
     byProject.set(s.cwd, proj);
 
-    // group by day from created_at
-    if (s.created_at) {
-      const day = s.created_at.slice(0, 10);
-      const bucket = byDay.get(day) || { day, sessions: 0, lines: 0, cost: 0 };
-      bucket.sessions += 1;
-      byDay.set(day, bucket);
-    }
+    // Session-started event (ms precision)
+    const sessionTs = Date.parse(s.created_at || '');
+    if (Number.isFinite(sessionTs)) events.push({ ts: sessionTs, sessions: 1 });
 
-    // Walk hunk_records for lines + per-ext
+    // Walk hunk_records for lines + per-ext + per-hunk events
     let sessionLines = 0;
     for await (const h of iterJsonl(path.join(s.path, 'hunk_records.jsonl'))) {
       const fp = h.filePath || '';
@@ -620,14 +628,13 @@ async function buildOverview() {
         filesUniverse.add(fp);
         const ext = extBucket(fp);
         byExt.set(ext, (byExt.get(ext) || 0) + added);
+        const hts = Date.parse(h.timestamp || '');
+        if (Number.isFinite(hts) && added > 0) {
+          events.push({ ts: hts, lines: added });
+        }
       }
     }
     proj.lines_added += sessionLines;
-    if (s.created_at) {
-      const day = s.created_at.slice(0, 10);
-      const bucket = byDay.get(day);
-      if (bucket) bucket.lines += sessionLines;
-    }
 
     // events.jsonl
     for await (const e of iterJsonl(path.join(s.path, 'events.jsonl'))) {
@@ -654,6 +661,9 @@ async function buildOverview() {
     totals.tokens_input += u.input_tokens;
     totals.tokens_output += u.output_tokens;
     totals.cost_usd += u.cost_usd;
+    if (u.mtimeMs && u.cost_usd > 0) {
+      events.push({ ts: u.mtimeMs, cost: u.cost_usd });
+    }
   }
 
   // Top extensions, top tools, top projects
@@ -669,18 +679,49 @@ async function buildOverview() {
     .sort((a, b) => b.lines_added - a.lines_added)
     .slice(0, 15);
 
-  // Activity last 90 days (filled, even if zero) + cumulative running totals
-  const today = new Date();
+  // Activity over the requested range (cfg.bucket_ms granularity, filled).
+  events.sort((a, b) => a.ts - b.ts);
+  const nowMs = Date.now();
+  const cutoff = cfg.window_ms
+    ? nowMs - cfg.window_ms
+    : (events.length ? events[0].ts : nowMs);
+
+  const aggBuckets = new Map();
+  for (const e of events) {
+    if (e.ts < cutoff) continue;
+    const bk = Math.floor(e.ts / cfg.bucket_ms) * cfg.bucket_ms;
+    let b = aggBuckets.get(bk);
+    if (!b) {
+      b = { ts: bk, sessions: 0, lines: 0, cost: 0 };
+      aggBuckets.set(bk, b);
+    }
+    if (e.sessions) b.sessions += e.sessions;
+    if (e.lines) b.lines += e.lines;
+    if (e.cost) b.cost += e.cost;
+  }
+
+  const startBucket = Math.floor(cutoff / cfg.bucket_ms) * cfg.bucket_ms;
+  const endBucket = Math.floor(nowMs / cfg.bucket_ms) * cfg.bucket_ms;
   const days = [];
   let cumLines = 0, cumCost = 0, cumSessions = 0;
-  for (let i = 89; i >= 0; i--) {
-    const d = new Date(today.getTime() - i * 86400 * 1000);
-    const key = d.toISOString().slice(0, 10);
-    const bucket = byDay.get(key) || { day: key, sessions: 0, lines: 0, cost: 0 };
-    cumLines += bucket.lines;
-    cumCost += bucket.cost;
-    cumSessions += bucket.sessions;
-    days.push({ ...bucket, cum_lines: cumLines, cum_cost: cumCost, cum_sessions: cumSessions });
+  for (let t = startBucket; t <= endBucket; t += cfg.bucket_ms) {
+    const b = aggBuckets.get(t) || { ts: t, sessions: 0, lines: 0, cost: 0 };
+    cumLines += b.lines;
+    cumCost += b.cost;
+    cumSessions += b.sessions;
+    const iso = new Date(t).toISOString();
+    // For day-resolution buckets use YYYY-MM-DD; otherwise full ISO time.
+    const day = cfg.bucket_ms >= 86400 * 1000 ? iso.slice(0, 10) : iso;
+    days.push({
+      ts: t,
+      day,
+      sessions: b.sessions,
+      lines: b.lines,
+      cost: b.cost,
+      cum_lines: cumLines,
+      cum_cost: cumCost,
+      cum_sessions: cumSessions,
+    });
   }
 
   // Per-session enrichment for top-sessions ranking and table
@@ -745,8 +786,14 @@ async function buildOverview() {
     recent_sessions: recentSessions,
     models: modelMix,
     activity: days,
+    range: {
+      key: rangeKey,
+      label: cfg.label,
+      bucket_ms: cfg.bucket_ms,
+      window_ms: cfg.window_ms,
+    },
   };
-  overviewCache = { ts: Date.now(), data: out };
+  overviewCache.set(rangeKey, { ts: Date.now(), data: out });
   return out;
 }
 
@@ -926,9 +973,10 @@ app.get('/api/active', async (_req, res) => {
   }
 });
 
-app.get('/api/overview', async (_req, res) => {
+app.get('/api/overview', async (req, res) => {
   try {
-    const data = await buildOverview();
+    const rangeKey = typeof req.query.range === 'string' ? req.query.range : '90d';
+    const data = await buildOverview(rangeKey);
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: String(err && err.message || err) });

@@ -719,6 +719,49 @@ body {
   color: var(--text-muted);
 }
 
+/* ---------- range selector ---------- */
+.range-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 4px 0;
+}
+.range-label {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.range-pills {
+  display: inline-flex;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 3px;
+  gap: 2px;
+}
+.range-pill {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.range-pill:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.range-pill.active {
+  background: linear-gradient(180deg, rgba(94,234,212,0.18), rgba(94,234,212,0.06));
+  color: var(--accent);
+}
+
 /* ---------- charts ---------- */
 .chart-svg {
   width: 100%;
