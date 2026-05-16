@@ -5,7 +5,14 @@
 
 Live monitoring + observability for the [Grok CLI](https://docs.x.ai/build/overview).
 
-![grokscope dashboard](docs/screenshot.png)
+![grokscope overview](docs/screenshot-overview.png)
+
+<details>
+<summary>Per-session detail view</summary>
+
+![grokscope session](docs/screenshot.png)
+
+</details>
 
 `grokscope` watches the JSONL telemetry your local Grok sessions write to `~/.grok/sessions/`
 and renders a live web dashboard with tokens, lines of code written, tool usage, and per-API-call
@@ -159,6 +166,10 @@ is ~270 lines of vanilla JS (no React, no charting library, bar charts are CSS d
 - The token-rate window is `TOKEN_WINDOW_SEC = 30` seconds.
 - The `usageCache` Map memoizes per-tag parses; if you wipe `~/.grok-tap/` the cache invalidates
   by file mtime.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
