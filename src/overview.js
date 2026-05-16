@@ -5,7 +5,18 @@ import {
   loadSidebarSessions, wireSidebar,
 } from './common.js';
 
-const state = { overview: null, range: '30d' };
+const VALID_RANGES = ['30m', '24h', '7d', '30d', '90d', 'all'];
+const LS_RANGE_KEY = 'grokscope.overview.range';
+
+function loadSavedRange() {
+  try {
+    const v = localStorage.getItem(LS_RANGE_KEY);
+    if (v && VALID_RANGES.includes(v)) return v;
+  } catch {}
+  return '30d';
+}
+
+const state = { overview: null, range: loadSavedRange() };
 
 const RANGE_TITLES = {
   '30m': 'Activity (last 30 minutes)',
@@ -30,15 +41,20 @@ async function loadOverview() {
   }
 }
 
-function setRange(key) {
-  if (state.range === key) return;
-  state.range = key;
+function applyRangePillUI(key) {
   for (const b of document.querySelectorAll('.range-pill')) {
     b.classList.toggle('active', b.dataset.range === key);
   }
   const title = RANGE_TITLES[key] || `Activity (${key})`;
   const tEl = $('activity-title');
   if (tEl) tEl.textContent = title;
+}
+
+function setRange(key) {
+  if (state.range === key) return;
+  state.range = key;
+  try { localStorage.setItem(LS_RANGE_KEY, key); } catch {}
+  applyRangePillUI(key);
   loadOverview();
 }
 
@@ -77,9 +93,25 @@ function renderOverview() {
   $('k-avg-tools').textContent = fmtNum(a.tools_per_session || 0);
   $('k-avg-sub').textContent = (a.subagents_per_session || 0).toFixed(2);
 
-  // Activity heatmap (90 days, 5-cell-tall rows for compactness)
+  // Activity heatmap
   renderActivityGrid(act);
   $('activity-summary').textContent = `${act.reduce((s, d) => s + d.sessions, 0)} sessions · ${fmtNum(act.reduce((s, d) => s + d.lines, 0))} lines · $${act.reduce((s, d) => s + d.cost, 0).toFixed(2)}`;
+
+  // Chart titles follow the bucket granularity
+  const bucketMs = ov.range?.bucket_ms || 86400000;
+  let unit = 'day';
+  if (bucketMs <= 60 * 1000) unit = 'minute';
+  else if (bucketMs <= 60 * 60 * 1000) unit = 'hour';
+  $('chart-sessions-title').textContent = `Sessions per ${unit}`;
+  $('chart-lines-title').textContent = `Lines written per ${unit}`;
+  // Cumulative chart titles get a range qualifier so it's clear what window they sum over.
+  const rangeLabel = ov.range?.label || '';
+  $('chart-cum-lines-title').textContent = rangeLabel
+    ? `Cumulative lines (${rangeLabel})`
+    : 'Cumulative lines';
+  $('chart-cum-cost-title').textContent = rangeLabel
+    ? `Cumulative cost (${rangeLabel})`
+    : 'Cumulative cost';
 
   // Line charts
   renderLineChart($('chart-sessions'), act.map((d) => ({ x: d.day, y: d.sessions })), { accent: '#79c0ff', area: true });
@@ -195,6 +227,7 @@ function renderActivityGrid(act) {
 
 async function init() {
   wireSidebar();
+  applyRangePillUI(state.range);
   for (const b of document.querySelectorAll('.range-pill')) {
     b.addEventListener('click', () => setRange(b.dataset.range));
   }

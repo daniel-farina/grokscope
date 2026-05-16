@@ -323,12 +323,27 @@ export function renderSpark(svg, data, accent) {
 
 // ---------- sidebar (shared) ----------
 
+const LS_COLLAPSED = 'grokscope.sidebar.collapsed';
+
+function loadSavedCollapsed() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_COLLAPSED) || '[]');
+    return new Set(Array.isArray(v) ? v : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCollapsed(set) {
+  try { localStorage.setItem(LS_COLLAPSED, JSON.stringify(Array.from(set))); } catch {}
+}
+
 const sidebarState = {
   sessions: [],
   search: '',
-  collapsed: new Set(),
+  collapsed: loadSavedCollapsed(),
   activeId: null,
-  onSelect: null, // callback when a session is clicked
+  onSelect: null,
 };
 
 export function getActiveSidebarId() {
@@ -455,6 +470,7 @@ export function renderSidebarSessions() {
         ev.stopPropagation();
         if (sidebarState.collapsed.has(s.id)) sidebarState.collapsed.delete(s.id);
         else sidebarState.collapsed.add(s.id);
+        saveCollapsed(sidebarState.collapsed);
         renderSidebarSessions();
       };
       head.appendChild(chev);
@@ -501,14 +517,29 @@ export function renderSidebarSessions() {
   for (const r of roots) renderNode(r, 0);
 }
 
+const LS_SEARCH = 'grokscope.sidebar.search';
+
 export function wireSidebar({ onSelect } = {}) {
   sidebarState.onSelect = onSelect || null;
   const input = $('session-search');
   const clear = $('session-search-clear');
   if (!input) return;
+
+  // Restore saved search text on load
+  try {
+    const saved = localStorage.getItem(LS_SEARCH);
+    if (saved) {
+      input.value = saved;
+      sidebarState.search = saved;
+      clear.hidden = !saved;
+      renderSidebarSessions();
+    }
+  } catch {}
+
   const apply = () => {
     sidebarState.search = input.value;
     clear.hidden = !input.value;
+    try { localStorage.setItem(LS_SEARCH, input.value); } catch {}
     renderSidebarSessions();
   };
   input.addEventListener('input', apply);
