@@ -680,6 +680,145 @@ body {
 .act-cell[data-level="3"] { background: rgba(94,234,212,0.55); border-color: rgba(94,234,212,0.6); }
 .act-cell[data-level="4"] { background: rgba(94,234,212,0.85); border-color: rgba(94,234,212,1); }
 
+/* ---------- secondary KPI strip ---------- */
+.metrics-strip.secondary {
+  grid-template-columns: repeat(7, 1fr);
+  padding-top: 4px;
+  padding-bottom: 14px;
+  gap: 8px;
+}
+.kpi {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kpi-label {
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.kpi-value {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.kpi-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ---------- charts ---------- */
+.chart-svg {
+  width: 100%;
+  height: 180px;
+  display: block;
+}
+.activity-strip-large {
+  display: grid;
+  grid-template-columns: repeat(45, 1fr);
+  grid-auto-rows: 1fr;
+  gap: 3px;
+  padding: 4px 0;
+}
+.hint {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* ---------- donut ---------- */
+.donut-root .empty { padding: 14px; }
+.donut-wrap {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 16px;
+  align-items: center;
+}
+.donut { width: 140px; height: 140px; }
+.donut-legend { display: flex; flex-direction: column; gap: 4px; font-family: var(--mono); font-size: 11px; }
+.donut-leg-row {
+  display: grid;
+  grid-template-columns: 12px 1fr 60px 50px;
+  align-items: center;
+  gap: 8px;
+}
+.donut-leg-row i {
+  width: 10px; height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.donut-leg-row .ll-name { color: var(--text); }
+.donut-leg-row .ll-val { color: var(--text-muted); text-align: right; }
+.donut-leg-row .ll-pct { color: var(--accent); text-align: right; }
+
+/* ---------- proj-row with bar ---------- */
+.proj-row {
+  display: grid;
+  grid-template-columns: 1fr 40px 80px 80px 70px;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 5px;
+}
+.proj-bar {
+  height: 8px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.proj-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+/* ---------- session table row ---------- */
+.sess-table-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 70px 60px 80px 70px;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  text-decoration: none;
+  color: var(--text);
+  transition: background 0.1s;
+}
+.sess-table-row:hover { background: var(--bg-2); }
+.sess-table-row .proj-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sess-table-row .proj-cwd {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+.sess-table-header {
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding-bottom: 6px;
+}
+.sess-table-header:hover { background: transparent; }
+
+/* For the Top sessions block (4 columns instead of 6) */
+#overview-top-sessions .sess-table-row {
+  grid-template-columns: 1fr 70px 80px 70px;
+}
+
 /* ---------- files + git ---------- */
 .file-row {
   display: grid;

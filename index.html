@@ -32,45 +32,40 @@
 
       <section class="metrics-strip">
         <div class="metric" data-tone="cyan">
-          <div class="metric-head">
-            <span class="metric-label">Tokens used</span>
-            <span class="metric-rate" id="m-token-rate">all time</span>
-          </div>
+          <div class="metric-head"><span class="metric-label">Tokens used</span><span class="metric-rate" id="m-token-rate">all time</span></div>
           <div class="metric-value" id="m-tokens">0</div>
           <svg class="spark" id="spark-tokens" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
         </div>
         <div class="metric" data-tone="green">
-          <div class="metric-head">
-            <span class="metric-label">Lines written</span>
-            <span class="metric-rate" id="m-loc-delta">0 files</span>
-          </div>
+          <div class="metric-head"><span class="metric-label">Lines written</span><span class="metric-rate" id="m-loc-delta">0 files</span></div>
           <div class="metric-value" id="m-loc">0</div>
           <svg class="spark" id="spark-loc" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
         </div>
         <div class="metric" data-tone="violet">
-          <div class="metric-head">
-            <span class="metric-label">Tools called</span>
-            <span class="metric-rate" id="m-tool-delta">0 turns</span>
-          </div>
+          <div class="metric-head"><span class="metric-label">Tools called</span><span class="metric-rate" id="m-tool-delta">0 turns</span></div>
           <div class="metric-value" id="m-tools">0</div>
           <svg class="spark" id="spark-tools" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
         </div>
         <div class="metric" data-tone="amber">
-          <div class="metric-head">
-            <span class="metric-label">API cost</span>
-            <span class="metric-rate" id="m-cost-calls">0 calls</span>
-          </div>
+          <div class="metric-head"><span class="metric-label">API cost</span><span class="metric-rate" id="m-cost-calls">0 calls</span></div>
           <div class="metric-value" id="m-cost">$0.00</div>
           <svg class="spark" id="spark-cost" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
         </div>
         <div class="metric" data-tone="pink">
-          <div class="metric-head">
-            <span class="metric-label">Sessions</span>
-            <span class="metric-rate" id="m-turn-errors">0 main · 0 sub</span>
-          </div>
+          <div class="metric-head"><span class="metric-label">Sessions</span><span class="metric-rate" id="m-turn-errors">0 main · 0 sub</span></div>
           <div class="metric-value" id="m-turns">0</div>
           <svg class="spark" id="spark-turns" preserveAspectRatio="none" viewBox="0 0 100 30"></svg>
         </div>
+      </section>
+
+      <section class="metrics-strip secondary">
+        <div class="kpi"><span class="kpi-label">Messages</span><span class="kpi-value" id="k-messages">0</span></div>
+        <div class="kpi"><span class="kpi-label">Turns</span><span class="kpi-value" id="k-turns">0</span><span class="kpi-sub" id="k-turn-err">0 errored</span></div>
+        <div class="kpi"><span class="kpi-label">Files touched</span><span class="kpi-value" id="k-files">0</span></div>
+        <div class="kpi"><span class="kpi-label">Permission prompts</span><span class="kpi-value" id="k-perms">0</span></div>
+        <div class="kpi"><span class="kpi-label">Avg lines / session</span><span class="kpi-value" id="k-avg-loc">0</span></div>
+        <div class="kpi"><span class="kpi-label">Avg tools / session</span><span class="kpi-value" id="k-avg-tools">0</span></div>
+        <div class="kpi"><span class="kpi-label">Avg subagents / session</span><span class="kpi-value" id="k-avg-sub">0</span></div>
       </section>
 
       <main class="main">
@@ -82,30 +77,67 @@
           <div class="search-wrap">
             <svg class="search-ic" viewBox="0 0 16 16" width="12" height="12"><circle cx="7" cy="7" r="4.5" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M10.5 10.5 L14 14" stroke="currentColor" stroke-width="1.4"/></svg>
             <input type="text" class="search-input" id="session-search" placeholder="filter sessions" autocomplete="off" />
-            <button class="search-clear" id="session-search-clear" title="Clear" aria-label="Clear search" hidden>×</button>
+            <button class="search-clear" id="session-search-clear" title="Clear" hidden>×</button>
           </div>
           <div class="session-list" id="session-list">loading...</div>
         </aside>
 
         <section class="panel">
           <div class="row">
+            <div class="block block-wide">
+              <div class="block-head"><h3>Activity (last 90 days)</h3><span class="hint" id="activity-summary"></span></div>
+              <div id="overview-activity" class="activity-strip-large">loading...</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block">
+              <div class="block-head"><h3>Sessions per day</h3></div>
+              <svg id="chart-sessions" class="chart-svg" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="block">
+              <div class="block-head"><h3>Lines written per day</h3></div>
+              <svg id="chart-lines" class="chart-svg" preserveAspectRatio="none"></svg>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block">
+              <div class="block-head"><h3>Cumulative lines</h3></div>
+              <svg id="chart-cum-lines" class="chart-svg" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="block">
+              <div class="block-head"><h3>Cumulative cost</h3></div>
+              <svg id="chart-cum-cost" class="chart-svg" preserveAspectRatio="none"></svg>
+            </div>
+          </div>
+
+          <div class="row">
             <div class="block">
               <div class="block-head"><h3>Top projects</h3></div>
               <div id="overview-projects" class="list">loading...</div>
             </div>
             <div class="block">
-              <div class="block-head"><h3>Activity (last 30 days)</h3></div>
-              <div id="overview-activity" class="activity-strip">loading...</div>
+              <div class="block-head"><h3>Top sessions by lines</h3></div>
+              <div id="overview-top-sessions" class="list">loading...</div>
             </div>
           </div>
+
           <div class="row">
-            <div class="block">
-              <div class="block-head"><h3>Lines by extension (all-time)</h3></div>
-              <div id="overview-ext" class="bars">loading...</div>
-            </div>
             <div class="block">
               <div class="block-head"><h3>Tools used (all-time)</h3></div>
               <div id="overview-tools" class="bars">loading...</div>
+            </div>
+            <div class="block">
+              <div class="block-head"><h3>Lines by extension</h3></div>
+              <div id="overview-ext-donut" class="donut-root">loading...</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="block block-wide">
+              <div class="block-head"><h3>Recent sessions</h3></div>
+              <div id="overview-recent" class="list">loading...</div>
             </div>
           </div>
         </section>

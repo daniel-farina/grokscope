@@ -103,6 +103,180 @@ export function renderBars(root, items) {
   }
 }
 
+// Line chart with optional axis labels.
+// data: array of {x: Date|string, y: number}
+// opts: { accent, area: bool, labels: bool, height: number }
+export function renderLineChart(svg, data, opts = {}) {
+  if (!svg) return;
+  const accent = opts.accent || '#5eead4';
+  const area = opts.area !== false;
+  const labels = opts.labels !== false;
+  svg.innerHTML = '';
+  if (!data.length) return;
+  const w = 600, h = opts.height || 180;
+  const padL = labels ? 36 : 6, padR = 8, padT = 10, padB = labels ? 20 : 6;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+  const ys = data.map((d) => d.y);
+  const minY = 0;
+  const maxY = Math.max(...ys, 1);
+  const stepX = data.length > 1 ? plotW / (data.length - 1) : plotW;
+  const points = data.map((d, i) => {
+    const x = padL + i * stepX;
+    const y = padT + plotH - ((d.y - minY) / (maxY - minY)) * plotH;
+    return [x, y];
+  });
+
+  let line = `M ${points[0][0]} ${points[0][1]} `;
+  for (let i = 1; i < points.length; i++) line += `L ${points[i][0]} ${points[i][1]} `;
+
+  let areaPath = '';
+  if (area) {
+    areaPath = `M ${points[0][0]} ${padT + plotH} `;
+    for (const [x, y] of points) areaPath += `L ${x} ${y} `;
+    areaPath += `L ${points[points.length - 1][0]} ${padT + plotH} Z`;
+  }
+
+  const gradId = (svg.id || 'g') + '-grad';
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+
+  // y-axis ticks (4)
+  let yTicks = '';
+  if (labels) {
+    for (let i = 0; i <= 3; i++) {
+      const v = (maxY / 3) * (3 - i);
+      const yy = padT + (plotH / 3) * i;
+      yTicks += `<line x1="${padL}" y1="${yy}" x2="${w - padR}" y2="${yy}" stroke="rgba(255,255,255,0.04)" />`;
+      yTicks += `<text x="${padL - 4}" y="${yy + 3}" fill="#6b7785" font-size="9" font-family="ui-monospace,monospace" text-anchor="end">${formatTick(v)}</text>`;
+    }
+  }
+  // x-axis labels: first, middle, last
+  let xTicks = '';
+  if (labels && data.length > 1) {
+    const pick = [0, Math.floor(data.length / 2), data.length - 1];
+    for (const i of pick) {
+      const x = padL + i * stepX;
+      const lbl = String(data[i].x || '').slice(-5);
+      xTicks += `<text x="${x}" y="${h - 4}" fill="#6b7785" font-size="9" font-family="ui-monospace,monospace" text-anchor="middle">${lbl}</text>`;
+    }
+  }
+
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${accent}" stop-opacity="0.30" />
+        <stop offset="100%" stop-color="${accent}" stop-opacity="0" />
+      </linearGradient>
+    </defs>
+    ${yTicks}
+    ${area ? `<path d="${areaPath}" fill="url(#${gradId})" />` : ''}
+    <path d="${line}" fill="none" stroke="${accent}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+    <circle cx="${points[points.length - 1][0]}" cy="${points[points.length - 1][1]}" r="2.5" fill="${accent}" />
+    ${xTicks}
+  `;
+}
+
+function formatTick(v) {
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + 'M';
+  if (v >= 1_000) return (v / 1_000).toFixed(1) + 'k';
+  if (v < 1 && v > 0) return v.toFixed(3);
+  return Math.round(v).toString();
+}
+
+// Stacked area chart: data is array of {x, series: {a: n, b: n, ...}}, series order from `order`.
+export function renderStackedChart(svg, data, order, colors, opts = {}) {
+  if (!svg || !data.length) return;
+  const w = 600, h = opts.height || 180;
+  const padL = 36, padR = 8, padT = 10, padB = 20;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+  const totals = data.map((d) => order.reduce((s, k) => s + (d.series[k] || 0), 0));
+  const maxY = Math.max(...totals, 1);
+  const stepX = data.length > 1 ? plotW / (data.length - 1) : plotW;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  let html = '';
+  // gridlines
+  for (let i = 0; i <= 3; i++) {
+    const yy = padT + (plotH / 3) * i;
+    html += `<line x1="${padL}" y1="${yy}" x2="${w - padR}" y2="${yy}" stroke="rgba(255,255,255,0.04)" />`;
+    const v = (maxY / 3) * (3 - i);
+    html += `<text x="${padL - 4}" y="${yy + 3}" fill="#6b7785" font-size="9" font-family="ui-monospace,monospace" text-anchor="end">${formatTick(v)}</text>`;
+  }
+  // stack from bottom
+  let prevYs = data.map(() => padT + plotH);
+  for (const key of order) {
+    const color = colors[key] || '#5eead4';
+    const ys = data.map((d, i) => {
+      const v = (d.series[key] || 0);
+      const dy = (v / maxY) * plotH;
+      return prevYs[i] - dy;
+    });
+    let area = `M ${padL} ${prevYs[0]} `;
+    for (let i = 0; i < ys.length; i++) area += `L ${padL + i * stepX} ${ys[i]} `;
+    for (let i = ys.length - 1; i >= 0; i--) area += `L ${padL + i * stepX} ${prevYs[i]} `;
+    area += 'Z';
+    html += `<path d="${area}" fill="${color}" opacity="0.85" />`;
+    prevYs = ys;
+  }
+  svg.innerHTML = html;
+}
+
+// Donut chart for categorical breakdowns.
+// items: [{name, value}], colors: array
+export function renderDonut(root, items, colors) {
+  root.innerHTML = '';
+  if (!items.length) {
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = 'no data';
+    root.appendChild(d);
+    return;
+  }
+  const total = items.reduce((s, i) => s + (i.value || 0), 0) || 1;
+  const radius = 56, ring = 16, cx = 70, cy = 70;
+  const palette = colors || ['#5eead4', '#79c0ff', '#c4b5fd', '#fbbf24', '#f9a8d4', '#86efac', '#f97316', '#a78bfa'];
+  let angleStart = -Math.PI / 2;
+  let svgInner = '';
+  items.forEach((it, idx) => {
+    const frac = (it.value || 0) / total;
+    if (frac <= 0) return;
+    const angleEnd = angleStart + frac * Math.PI * 2;
+    const x1 = cx + Math.cos(angleStart) * radius;
+    const y1 = cy + Math.sin(angleStart) * radius;
+    const x2 = cx + Math.cos(angleEnd) * radius;
+    const y2 = cy + Math.sin(angleEnd) * radius;
+    const ix1 = cx + Math.cos(angleStart) * (radius - ring);
+    const iy1 = cy + Math.sin(angleStart) * (radius - ring);
+    const ix2 = cx + Math.cos(angleEnd) * (radius - ring);
+    const iy2 = cy + Math.sin(angleEnd) * (radius - ring);
+    const large = frac > 0.5 ? 1 : 0;
+    const color = palette[idx % palette.length];
+    svgInner += `
+      <path d="M ${x1} ${y1} A ${radius} ${radius} 0 ${large} 1 ${x2} ${y2}
+               L ${ix2} ${iy2} A ${radius - ring} ${radius - ring} 0 ${large} 0 ${ix1} ${iy1} Z"
+            fill="${color}" />
+    `;
+    angleStart = angleEnd;
+  });
+  const wrap = document.createElement('div');
+  wrap.className = 'donut-wrap';
+  wrap.innerHTML = `
+    <svg class="donut" viewBox="0 0 140 140">${svgInner}<text x="70" y="68" text-anchor="middle" fill="#e4e8ef" font-family="ui-monospace,monospace" font-size="13" font-weight="600">${total.toLocaleString()}</text><text x="70" y="84" text-anchor="middle" fill="#6b7785" font-family="ui-monospace,monospace" font-size="9">total</text></svg>
+    <div class="donut-legend"></div>
+  `;
+  const legend = wrap.querySelector('.donut-legend');
+  items.forEach((it, idx) => {
+    const color = palette[idx % palette.length];
+    const pct = (((it.value || 0) / total) * 100).toFixed(1);
+    const row = document.createElement('div');
+    row.className = 'donut-leg-row';
+    row.innerHTML = `<i style="background:${color}"></i><span class="ll-name">${it.name}</span><span class="ll-val">${fmtNum(it.value)}</span><span class="ll-pct">${pct}%</span>`;
+    legend.appendChild(row);
+  });
+  root.appendChild(wrap);
+}
+
 export function renderSpark(svg, data, accent) {
   if (!svg) return;
   svg.innerHTML = '';

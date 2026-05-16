@@ -669,17 +669,83 @@ async function buildOverview() {
     .sort((a, b) => b.lines_added - a.lines_added)
     .slice(0, 15);
 
-  // Activity last 30 days (filled, even if zero)
+  // Activity last 90 days (filled, even if zero) + cumulative running totals
   const today = new Date();
   const days = [];
-  for (let i = 29; i >= 0; i--) {
+  let cumLines = 0, cumCost = 0, cumSessions = 0;
+  for (let i = 89; i >= 0; i--) {
     const d = new Date(today.getTime() - i * 86400 * 1000);
     const key = d.toISOString().slice(0, 10);
     const bucket = byDay.get(key) || { day: key, sessions: 0, lines: 0, cost: 0 };
-    days.push(bucket);
+    cumLines += bucket.lines;
+    cumCost += bucket.cost;
+    cumSessions += bucket.sessions;
+    days.push({ ...bucket, cum_lines: cumLines, cum_cost: cumCost, cum_sessions: cumSessions });
   }
 
-  const out = { totals, top_extensions: topExt, top_tools: topTools, top_projects: topProjects, activity: days };
+  // Per-session enrichment for top-sessions ranking and table
+  const enriched = [];
+  for (const s of sessions) {
+    let lines = 0;
+    for await (const h of iterJsonl(path.join(s.path, 'hunk_records.jsonl'))) {
+      const fp = h.filePath || '';
+      if (!fp || fp.startsWith(s.path)) continue;
+      const et = h.eventType || 'added';
+      if (et === 'added') lines += Number(h.linesAdded || 0);
+    }
+    enriched.push({
+      id: s.id,
+      cwd: s.cwd,
+      title: s.title,
+      model: s.model,
+      created_at: s.created_at,
+      last_active: s.last_active,
+      num_messages: s.num_messages,
+      parent_id: s.parent_id || null,
+      subagent_count: (s.subagent_metas || []).length,
+      lines_added: lines,
+    });
+  }
+  const topSessions = enriched
+    .filter((s) => !s.parent_id)
+    .sort((a, b) => b.lines_added - a.lines_added)
+    .slice(0, 12);
+  const recentSessions = enriched
+    .filter((s) => !s.parent_id)
+    .sort((a, b) => b.last_active - a.last_active)
+    .slice(0, 12);
+
+  // Average per main session
+  const mains = enriched.filter((s) => !s.parent_id);
+  const avg = {
+    lines_per_session: mains.length ? Math.round(totals.lines_added / mains.length) : 0,
+    messages_per_session: mains.length ? Math.round(totals.messages / mains.length) : 0,
+    turns_per_session: mains.length ? Math.round(totals.turns_started / mains.length) : 0,
+    tools_per_session: mains.length ? Math.round(totals.tools_started / mains.length) : 0,
+    subagents_per_session: mains.length ? +(totals.subagents / mains.length).toFixed(2) : 0,
+  };
+
+  // Model usage breakdown
+  const byModel = new Map();
+  for (const s of enriched) {
+    const k = s.model || '(none)';
+    byModel.set(k, (byModel.get(k) || 0) + 1);
+  }
+  const modelMix = Array.from(byModel.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }));
+
+  const out = {
+    totals,
+    averages: avg,
+    top_extensions: topExt,
+    top_tools: topTools,
+    top_projects: topProjects,
+    top_sessions: topSessions,
+    recent_sessions: recentSessions,
+    models: modelMix,
+    activity: days,
+  };
   overviewCache = { ts: Date.now(), data: out };
   return out;
 }
