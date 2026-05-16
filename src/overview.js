@@ -115,7 +115,13 @@ function renderOverview() {
   const act = ov.activity || [];
 
   // Primary metrics strip
-  $('m-tokens').textContent = fmtNum(t.tokens_input + t.tokens_output);
+  // "Tokens used" = sum of per-session peak context size (best metric we can
+  // compute without the tap proxy). Includes prompt + generated history for
+  // each session's final context window. Tap-captured input/output is added
+  // on top so we don't undercount sessions that DO have captures.
+  const captured = (t.tokens_input || 0) + (t.tokens_output || 0);
+  const tokensUsed = (t.tokens_context_peak_sum || 0) + captured;
+  $('m-tokens').textContent = fmtNum(tokensUsed);
   $('m-token-rate').textContent = 'all time';
   $('m-loc').textContent = fmtNum(t.lines_added);
   $('m-loc-delta').textContent = `${fmtNum(t.files_touched)} files`;

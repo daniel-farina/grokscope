@@ -594,6 +594,9 @@ async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
     api_calls: 0,
     tokens_input: 0,
     tokens_output: 0,
+    // Sum of each session's peak context size (from updates.jsonl _meta.totalTokens).
+    // Best available "tokens used" estimate without the tap proxy.
+    tokens_context_peak_sum: 0,
   };
   const filesUniverse = new Set();
   const byExt = new Map();
@@ -654,6 +657,13 @@ async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
       } else if (etype === 'permission_requested') {
         totals.permission_prompts += 1;
       }
+    }
+
+    // Peak context tokens for this session (from updates.jsonl tail).
+    const peakTok = await getSessionPeakTokens(s.path);
+    if (peakTok > 0) {
+      totals.tokens_context_peak_sum += peakTok;
+      s._peakTokens = peakTok;
     }
   }
   totals.files_touched = filesUniverse.size;
@@ -760,6 +770,7 @@ async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
       parent_id: s.parent_id || null,
       subagent_count: (s.subagent_metas || []).length,
       lines_added: lines,
+      peak_tokens: s._peakTokens || 0,
     });
   }
   const topSessions = enriched
@@ -813,6 +824,43 @@ async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
 }
 
 // ------------ files in cwd + git history ------------
+
+// Read the last few lines of a (possibly huge) updates.jsonl to find the
+// peak _meta.totalTokens this session ever reached. totalTokens within a
+// session is monotonic between compactions, so scanning a tail window is
+// cheap and accurate enough for an overview metric.
+async function getSessionPeakTokens(sessPath) {
+  const p = path.join(sessPath, 'updates.jsonl');
+  const st = await safeStat(p);
+  if (!st || st.size === 0) return 0;
+  const TAIL = 16 * 1024; // 16 KB tail
+  const start = Math.max(0, st.size - TAIL);
+  let buf;
+  try {
+    const fh = await fsp.open(p, 'r');
+    try {
+      buf = Buffer.alloc(st.size - start);
+      await fh.read(buf, 0, buf.length, start);
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return 0;
+  }
+  const text = buf.toString('utf8');
+  const lines = text.split('\n');
+  let peak = 0;
+  // Walk the tail; keep the max totalTokens we see.
+  for (const line of lines) {
+    if (!line || !line.includes('totalTokens')) continue;
+    try {
+      const u = JSON.parse(line);
+      const tt = u?.params?._meta?.totalTokens;
+      if (typeof tt === 'number' && tt > peak) peak = tt;
+    } catch {}
+  }
+  return peak;
+}
 
 const FILES_LIMIT = 200;
 const FILES_DEPTH = 5;
