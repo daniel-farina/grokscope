@@ -594,9 +594,16 @@ async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
     api_calls: 0,
     tokens_input: 0,
     tokens_output: 0,
-    // Sum of each session's peak context size (from updates.jsonl _meta.totalTokens).
-    // Best available "tokens used" estimate without the tap proxy.
+    // Sum of each session's peak context size (one moment per session).
+    // Now used only as a small secondary stat.
     tokens_context_peak_sum: 0,
+    // Estimated tokens xAI's backend actually processed for this account:
+    // for each session, group updates.jsonl rows by streamStartMs (= one
+    // /v1/responses call) and sum max(totalTokens) per group. Approximates
+    // input-context-resent + output-generated across every API call.
+    tokens_billed_estimated: 0,
+    // Inferred number of /v1/responses calls across all sessions.
+    api_calls_estimated: 0,
   };
   const filesUniverse = new Set();
   const byExt = new Map();
@@ -664,6 +671,14 @@ async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
     if (peakTok > 0) {
       totals.tokens_context_peak_sum += peakTok;
       s._peakTokens = peakTok;
+    }
+    // Estimated billed-equivalent tokens (full walk, mtime-cached).
+    const billed = await getSessionBilledTokens(s);
+    if (billed.tokens > 0) {
+      totals.tokens_billed_estimated += billed.tokens;
+      totals.api_calls_estimated += billed.calls;
+      s._billedTokens = billed.tokens;
+      s._apiCalls = billed.calls;
     }
   }
   totals.files_touched = filesUniverse.size;
@@ -771,6 +786,8 @@ async function buildOverview(rangeKey = '90d', { fresh = false } = {}) {
       subagent_count: (s.subagent_metas || []).length,
       lines_added: lines,
       peak_tokens: s._peakTokens || 0,
+      billed_tokens: s._billedTokens || 0,
+      api_calls: s._apiCalls || 0,
     });
   }
   const topSessions = enriched
@@ -860,6 +877,44 @@ async function getSessionPeakTokens(sessPath) {
     } catch {}
   }
   return peak;
+}
+
+// Compute estimated billed-equivalent tokens for a session by walking the
+// full updates.jsonl and grouping by streamStartMs (one group per /v1/responses
+// call). For each group we take the max totalTokens (= context size at the end
+// of that call, i.e. input prior context + this call's output). Summing those
+// across all calls approximates the total tokens xAI's backend processed for
+// this session - the closest local measure of "usage" without the tap proxy
+// intercepting every request.
+//
+// Cached per-session by mtime so we only re-walk when updates.jsonl changes.
+const billedTokensCache = new Map(); // sessId -> { mtimeMs, value, calls }
+
+async function getSessionBilledTokens(sess) {
+  const p = path.join(sess.path, 'updates.jsonl');
+  const st = await safeStat(p);
+  if (!st || st.size === 0) return { tokens: 0, calls: 0 };
+  const cached = billedTokensCache.get(sess.id);
+  if (cached && cached.mtimeMs === st.mtimeMs) {
+    return { tokens: cached.value, calls: cached.calls };
+  }
+  // Per-stream max totalTokens. streamStartMs is one ms-timestamp per
+  // /v1/responses request.
+  const perStream = new Map();
+  for await (const u of iterJsonl(p)) {
+    const meta = u && u.params && u.params._meta;
+    if (!meta) continue;
+    const tt = meta.totalTokens;
+    const sm = meta.streamStartMs;
+    if (typeof tt !== 'number' || typeof sm !== 'number') continue;
+    const cur = perStream.get(sm) || 0;
+    if (tt > cur) perStream.set(sm, tt);
+  }
+  let sum = 0;
+  for (const v of perStream.values()) sum += v;
+  const calls = perStream.size;
+  billedTokensCache.set(sess.id, { mtimeMs: st.mtimeMs, value: sum, calls });
+  return { tokens: sum, calls };
 }
 
 const FILES_LIMIT = 200;

@@ -115,14 +115,18 @@ function renderOverview() {
   const act = ov.activity || [];
 
   // Primary metrics strip
-  // "Tokens used" = sum of per-session peak context size (best metric we can
-  // compute without the tap proxy). Includes prompt + generated history for
-  // each session's final context window. Tap-captured input/output is added
-  // on top so we don't undercount sessions that DO have captures.
+  // "Tokens used" estimate: sum of max(totalTokens) per /v1/responses call
+  // across every session. This approximates the input-context-resent
+  // plus output-generated total that xAI's backend processes - the closest
+  // local match to the usage figure they report. Tap captures are added on
+  // top for sessions that did go through the proxy (no double-counting since
+  // those sessions still produce streamStartMs groups, but tap totals
+  // include the precise per-call usage with cached/reasoning breakdowns).
+  const billed = t.tokens_billed_estimated || 0;
   const captured = (t.tokens_input || 0) + (t.tokens_output || 0);
-  const tokensUsed = (t.tokens_context_peak_sum || 0) + captured;
+  const tokensUsed = billed > 0 ? billed : ((t.tokens_context_peak_sum || 0) + captured);
   $('m-tokens').textContent = fmtNum(tokensUsed);
-  $('m-token-rate').textContent = 'all time';
+  $('m-token-rate').textContent = `~${fmtNum(t.api_calls_estimated || 0)} API calls`;
   $('m-loc').textContent = fmtNum(t.lines_added);
   $('m-loc-delta').textContent = `${fmtNum(t.files_touched)} files`;
   $('m-tools').textContent = fmtNum(t.tools_started);
